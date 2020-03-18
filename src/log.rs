@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(PartialEq, PartialOrd)]
 pub enum LogLevel {
@@ -19,12 +20,10 @@ impl fmt::Display for LogLevel {
     }
 }
 
-pub static mut LEVEL: LogLevel = LogLevel::Info;
+pub static LEVEL: AtomicUsize = AtomicUsize::new(LogLevel::Info as usize);
 
 pub fn log_init(level: LogLevel) {
-    unsafe {
-        LEVEL = level;
-    }
+    LEVEL.store(level as usize, Ordering::Relaxed);
 }
 
 #[macro_export]
@@ -78,8 +77,9 @@ macro_rules! log(
         #[allow(unused_imports)]
         {
             use std::io::Write;
+            use std::sync::atomic::Ordering;
             use chrono::Local;
-            if unsafe { $level <= $crate::log::LEVEL } {
+            if $level as usize <= $crate::log::LEVEL.load(Ordering::Relaxed) {
                 let mut msg = Vec::with_capacity(25);
                 let time = Local::now();
                 write!(&mut msg, "{} [{}:{}] {}: ",
@@ -99,8 +99,9 @@ macro_rules! log(
         #[allow(unused_imports)]
         {
             use std::io::Write;
+            use std::sync::atomic::Ordering;
             use chrono::Local;
-            if unsafe { $level <= $crate::log::LEVEL } {
+            if $level as usize <= $crate::log::LEVEL.load(Ordering::Relaxed) {
                 let mut msg = Vec::with_capacity(25);
                 let time = Local::now();
                 write!(&mut msg, "{} [{}:{}] {}: ",
