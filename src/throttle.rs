@@ -60,11 +60,11 @@ impl Throttler {
         }
     }
 
-    pub fn ul_rate(&mut self) -> Option<i64> {
+    pub fn upload_rate(&mut self) -> Option<i64> {
         self.ul_data.borrow().rate
     }
 
-    pub fn dl_rate(&mut self) -> Option<i64> {
+    pub fn download_rate(&mut self) -> Option<i64> {
         self.dl_data.borrow().rate
     }
 

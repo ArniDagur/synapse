@@ -2,10 +2,10 @@ use super::{Block, Picker};
 use rand::distributions::{Distribution, Range};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use torrent::{Bitfield, Info, Peer as TGPeer};
+use torrent::{Bitfield, TorrentInfo, Peer as TGPeer};
 use {control, rand};
 
-type TPeer = TGPeer<control::cio::test::TCIO>;
+type TPeer = TGPeer<control::cio::test::TestControlIO>;
 
 struct Simulation {
     cfg: TestCfg,
@@ -55,15 +55,15 @@ impl Simulation {
         }
         assert!(self.peers.borrow_mut()[0].data.pieces().complete());
         for peer in self.peers.borrow_mut().iter() {
-            for pid in peer.unchoked.iter() {
-                self.peers.borrow_mut()[*pid]
+            for peer_id in peer.unchoked.iter() {
+                self.peers.borrow_mut()[*peer_id]
                     .unchoked_by
                     .push(peer.data.id());
             }
         }
         for peer in self.peers.borrow_mut().iter_mut() {
-            for pid in 0..self.cfg.peers {
-                peer.requested_pieces.insert(pid as usize, 0);
+            for peer_id in 0..self.cfg.peers {
+                peer.requested_pieces.insert(peer_id as usize, 0);
             }
         }
     }
@@ -110,16 +110,16 @@ impl Simulation {
                         }
                     }
                     *received.requested_pieces.get_mut(&peer.data.id()).unwrap() -= 1;
-                    for pid in received.connected.iter() {
-                        self.peers.borrow_mut()[*pid]
+                    for peer_id in received.connected.iter() {
+                        self.peers.borrow_mut()[*peer_id]
                             .picker
                             .piece_available(req.piece);
                     }
                 }
             }
 
-            for pid in peer.unchoked_by.iter() {
-                let ref mut ucp = self.peers.borrow_mut()[*pid];
+            for peer_id in peer.unchoked_by.iter() {
+                let ref mut ucp = self.peers.borrow_mut()[*peer_id];
                 let cnt = peer.requested_pieces.get_mut(&ucp.data.id()).unwrap();
                 if peer.data.pieces().usable(ucp.data.pieces()) {
                     while *cnt < self.cfg.req_queue_len {
@@ -222,7 +222,7 @@ fn test_seq_efficiency() {
         req_per_tick: 2,
         req_queue_len: 2,
     };
-    let info = Info::with_pieces(cfg.pieces as usize);
+    let info = TorrentInfo::with_pieces(cfg.pieces as usize);
     let b = Bitfield::new(cfg.pieces as u64);
     let p = Picker::new_sequential(&info, &b);
     test_efficiency(cfg, p);
@@ -239,7 +239,7 @@ fn test_rarest_efficiency() {
         req_per_tick: 2,
         req_queue_len: 2,
     };
-    let info = Info::with_pieces(cfg.pieces as usize);
+    let info = TorrentInfo::with_pieces(cfg.pieces as usize);
     let b = Bitfield::new(cfg.pieces as u64);
     let p = Picker::new_rarest(&info, &b);
     test_efficiency(cfg, p);
@@ -247,8 +247,8 @@ fn test_rarest_efficiency() {
 
 #[test]
 fn test_seq_picker() {
-    let mut i = Info::with_pieces(10);
-    i.piece_idx = Info::generate_piece_idx(i.hashes.len(), i.piece_len as u64, &i.files);
+    let mut i = TorrentInfo::with_pieces(10);
+    i.piece_idx = TorrentInfo::generate_piece_idx(i.hashes.len(), i.piece_len as u64, &i.files);
     let b = Bitfield::new(10);
     let mut p = Picker::new_sequential(&i, &b);
     let mut pb = Bitfield::new(10);

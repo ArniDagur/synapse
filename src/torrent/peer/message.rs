@@ -5,7 +5,7 @@ use std::sync::Arc;
 use byteorder::{BigEndian, WriteBytesExt};
 
 use buffers::Buffer;
-use torrent::info::Info as TorrentInfo;
+use torrent::info::TorrentInfo;
 use torrent::Bitfield;
 
 pub enum Message {

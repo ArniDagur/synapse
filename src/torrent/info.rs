@@ -12,7 +12,7 @@ use disk;
 use util::{hash_to_id, id_to_hash, sha1_hash};
 
 #[derive(Clone)]
-pub struct Info {
+pub struct TorrentInfo {
     pub name: String,
     pub announce: Option<Arc<Url>>,
     pub creator: Option<String>,
@@ -29,7 +29,7 @@ pub struct Info {
     pub url_list: Vec<Vec<Arc<Url>>>,
 }
 
-impl fmt::Debug for Info {
+impl fmt::Debug for TorrentInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -87,8 +87,8 @@ impl File {
     }
 }
 
-impl Info {
-    pub fn from_magnet(data: &str) -> Result<Info, &'static str> {
+impl TorrentInfo {
+    pub fn from_magnet(data: &str) -> Result<TorrentInfo, &'static str> {
         let url = match Url::parse(data) {
             Ok(u) => u,
             Err(_) => return Err("Failed to parse magnet URL!"),
@@ -128,7 +128,7 @@ impl Info {
             .find(|&(ref k, _)| k == "dn")
             .map(|(_, ref v)| v.to_string())
             .unwrap_or_else(|| "".to_owned());
-        Ok(Info {
+        Ok(TorrentInfo {
             name,
             comment: None,
             creator: None,
@@ -210,7 +210,7 @@ impl Info {
         BEncode::Dict(info)
     }
 
-    pub fn from_bencode(data: BEncode) -> Result<Info, &'static str> {
+    pub fn from_bencode(data: BEncode) -> Result<TorrentInfo, &'static str> {
         data.into_dict()
             .and_then(|mut d| d.remove("info").and_then(|i| i.into_dict()).map(|i| (d, i)))
             .ok_or("invalid info field")
@@ -292,7 +292,7 @@ impl Info {
                 };
 
                 let total_len = files.iter().map(|f| f.length).sum();
-                let piece_idx = Info::generate_piece_idx(hashes.len(), pl, &files);
+                let piece_idx = TorrentInfo::generate_piece_idx(hashes.len(), pl, &files);
 
                 let url_list: Vec<_> = d
                     .remove("announce-list")
@@ -312,7 +312,7 @@ impl Info {
                     })
                     .collect();
 
-                Ok(Info {
+                Ok(TorrentInfo {
                     name,
                     comment,
                     creator,
@@ -346,8 +346,8 @@ impl Info {
     }
 
     #[cfg(test)]
-    pub fn with_pieces(pieces: usize) -> Info {
-        Info {
+    pub fn with_pieces(pieces: usize) -> TorrentInfo {
+        TorrentInfo {
             name: String::from(""),
             comment: None,
             creator: None,
@@ -371,8 +371,8 @@ impl Info {
     }
 
     #[cfg(test)]
-    pub fn with_pieces_scale(pieces: u32, scale: u32) -> Info {
-        Info {
+    pub fn with_pieces_scale(pieces: u32, scale: u32) -> TorrentInfo {
+        TorrentInfo {
             name: String::from(""),
             announce: None,
             comment: None,
@@ -421,13 +421,13 @@ impl Info {
     }
 
     /// Calculates the file offsets for a given block at index/begin
-    pub fn block_disk_locs(info: &Arc<Info>, index: u32, begin: u32) -> LocIter {
+    pub fn block_disk_locs(info: &Arc<TorrentInfo>, index: u32, begin: u32) -> LocIter {
         let len = info.block_len(index, begin);
         LocIter::new(info.clone(), None, index, begin, len)
     }
 
     pub fn block_disk_locs_pri(
-        info: &Arc<Info>,
+        info: &Arc<TorrentInfo>,
         priorities: &Arc<Vec<u8>>,
         index: u32,
         begin: u32,
@@ -437,14 +437,14 @@ impl Info {
     }
 
     /// Calculates the file offsets for a given piece at index
-    pub fn piece_disk_locs(info: &Arc<Info>, index: u32) -> LocIter {
+    pub fn piece_disk_locs(info: &Arc<TorrentInfo>, index: u32) -> LocIter {
         let len = info.piece_len(index);
         LocIter::new(info.clone(), None, index, 0, len)
     }
 }
 
 pub struct LocIter {
-    info: Arc<Info>,
+    info: Arc<TorrentInfo>,
     priorities: Option<Arc<Vec<u8>>>,
     state: LocIterState,
 }
@@ -463,7 +463,7 @@ struct LocIterPos {
 
 impl LocIter {
     pub fn new(
-        info: Arc<Info>,
+        info: Arc<TorrentInfo>,
         priorities: Option<Arc<Vec<u8>>>,
         index: u32,
         begin: u32,
@@ -576,7 +576,7 @@ mod tests {
     fn correct_piece_len() {
         let scale = 3;
         let pieces = 15;
-        let mut info = Info::with_pieces_scale(pieces, scale);
+        let mut info = TorrentInfo::with_pieces_scale(pieces, scale);
         let end = 16_700u32;
         info.total_len += end as u64;
         info.hashes.push(vec![]);
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn loc_iter_bounds() {
-        let mut info = Info::with_pieces(4);
+        let mut info = TorrentInfo::with_pieces(4);
         info.files.clear();
         info.files.push(File {
             path: PathBuf::from(""),
@@ -605,9 +605,9 @@ mod tests {
         });
         info.total_len = 50000;
         info.piece_idx =
-            Info::generate_piece_idx(info.hashes.len(), info.piece_len as u64, &info.files);
+            TorrentInfo::generate_piece_idx(info.hashes.len(), info.piece_len as u64, &info.files);
         let info = Arc::new(info);
-        let mut locs = Info::block_disk_locs(&info, 0, 0);
+        let mut locs = TorrentInfo::block_disk_locs(&info, 0, 0);
         let n = locs.next().unwrap();
         assert_eq!(n.start, 0);
         assert_eq!(n.end, 16384);
@@ -615,7 +615,7 @@ mod tests {
         assert_eq!(n.offset, 0);
         assert_eq!(locs.next().is_none(), true);
 
-        let mut locs = Info::block_disk_locs(&info, 1, 0);
+        let mut locs = TorrentInfo::block_disk_locs(&info, 1, 0);
         let n = locs.next().unwrap();
         assert_eq!(n.start, 0);
         assert_eq!(n.end, 16384);
@@ -623,7 +623,7 @@ mod tests {
         assert_eq!(n.offset, 16384);
         assert_eq!(locs.next().is_none(), true);
 
-        let mut locs = Info::block_disk_locs(&info, 2, 0);
+        let mut locs = TorrentInfo::block_disk_locs(&info, 2, 0);
         let n = locs.next().unwrap();
         assert_eq!(n.start, 0);
         assert_eq!(n.end, 7232);
@@ -636,7 +636,7 @@ mod tests {
         assert_eq!(n.file, 1);
         assert_eq!(n.offset, 0);
 
-        let mut locs = Info::block_disk_locs(&info, 3, 0);
+        let mut locs = TorrentInfo::block_disk_locs(&info, 3, 0);
         let n = locs.next().unwrap();
         assert_eq!(n.start, 0);
         assert_eq!(n.end, 848);

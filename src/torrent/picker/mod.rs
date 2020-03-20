@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time;
 
 use control::cio;
-use torrent::{Bitfield, Info, Peer};
+use torrent::{Bitfield, TorrentInfo, Peer};
 use util::FHashSet;
 
 mod rarest;
@@ -78,7 +78,7 @@ impl Picker {
     /// the given pieces. The algorithm used for selection
     /// will vary based on the current swarm state, but
     /// will default to rarest first.
-    pub fn new(info: &Arc<Info>, pieces: &Bitfield, priorities: &[u8]) -> Picker {
+    pub fn new(info: &Arc<TorrentInfo>, pieces: &Bitfield, priorities: &[u8]) -> Picker {
         let scale = info.piece_len / 16_384;
         let picker = rarest::Picker::new(pieces);
         let last_piece = info.pieces().saturating_sub(1);
@@ -156,7 +156,7 @@ impl Picker {
     }
 
     /// Attempts to select a block for a peer.
-    pub fn pick<T: cio::CIO>(&mut self, peer: &mut Peer<T>) -> Option<Block> {
+    pub fn pick<T: cio::ControlIO>(&mut self, peer: &mut Peer<T>) -> Option<Block> {
         if !self.stalled.is_empty() {
             let block = self.stalled.iter().cloned().find(|b| {
                 peer.pieces().has_bit(u64::from(b.index))
@@ -203,7 +203,7 @@ impl Picker {
     }
 
     /// Attempts to pick the highest priority piece in the dl q
-    fn pick_dl<T: cio::CIO>(&mut self, peer: &Peer<T>) -> Option<Block> {
+    fn pick_dl<T: cio::ControlIO>(&mut self, peer: &Peer<T>) -> Option<Block> {
         let mut dl: Vec<_> = self
             .downloading
             .iter_mut()
@@ -266,7 +266,7 @@ impl Picker {
         }
     }
 
-    pub fn add_peer<T: cio::CIO>(&mut self, peer: &Peer<T>) {
+    pub fn add_peer<T: cio::ControlIO>(&mut self, peer: &Peer<T>) {
         if peer.pieces().complete() {
             self.seeders += 1;
         } else if let PickerKind::Rarest(ref mut p) = self.picker {
@@ -274,7 +274,7 @@ impl Picker {
         }
     }
 
-    pub fn remove_peer<T: cio::CIO>(&mut self, peer: &Peer<T>) {
+    pub fn remove_peer<T: cio::ControlIO>(&mut self, peer: &Peer<T>) {
         // Have to consider situation where a peer became a seeder but joined as leecher.
         if peer.pieces().complete() && self.seeders > 0 {
             self.seeders -= 1;
@@ -306,7 +306,7 @@ impl Picker {
         };
     }
 
-    pub fn set_priorities(&mut self, pri: &[u8], info: &Arc<Info>) {
+    pub fn set_priorities(&mut self, pri: &[u8], info: &Arc<TorrentInfo>) {
         self.unapply_priorities();
         self.priorities = generate_piece_pri(pri, info);
         self.apply_priorities();
@@ -356,13 +356,13 @@ impl Picker {
     }
 }
 
-fn generate_piece_pri(pri: &[u8], info: &Arc<Info>) -> Vec<u8> {
+fn generate_piece_pri(pri: &[u8], info: &Arc<TorrentInfo>) -> Vec<u8> {
     // Map piece -> priority
     let mut priorities = Vec::with_capacity(info.pieces() as usize);
     // If a piece is completely in a file, just assign that pri.
     // Otherwise mark it as the higher pri piece
     for p in 0..info.pieces() {
-        let max = Info::piece_disk_locs(&info, p)
+        let max = TorrentInfo::piece_disk_locs(&info, p)
             .map(|loc| pri[loc.file])
             .max()
             .expect("Piece must have locations!");
@@ -373,7 +373,7 @@ fn generate_piece_pri(pri: &[u8], info: &Arc<Info>) -> Vec<u8> {
 
 #[cfg(test)]
 impl Picker {
-    pub fn new_rarest(info: &Info, pieces: &Bitfield) -> Picker {
+    pub fn new_rarest(info: &TorrentInfo, pieces: &Bitfield) -> Picker {
         Picker::new(
             &Arc::new(info.clone()),
             pieces,
@@ -381,7 +381,7 @@ impl Picker {
         )
     }
 
-    pub fn new_sequential(info: &Info, pieces: &Bitfield) -> Picker {
+    pub fn new_sequential(info: &TorrentInfo, pieces: &Bitfield) -> Picker {
         let mut p = Picker::new(
             &Arc::new(info.clone()),
             pieces,

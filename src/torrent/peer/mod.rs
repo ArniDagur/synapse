@@ -15,7 +15,7 @@ use rpc::{self, resource};
 use socket::Socket;
 use stat;
 use throttle::Throttle;
-use torrent::{Bitfield, Info, Torrent};
+use torrent::{Bitfield, TorrentInfo, Torrent};
 use tracker;
 use util;
 use {CONFIG, DHT_EXT};
@@ -33,9 +33,9 @@ const INIT_MAX_QUEUE: u16 = 5;
 const MAX_QUEUE_CAP: u16 = 600;
 
 /// Peer connection and associated metadata.
-pub struct Peer<T: cio::CIO> {
+pub struct Peer<T: cio::ControlIO> {
     id: usize,
-    cio: T,
+    control_io: T,
     pieces: Bitfield,
     piece_count: usize,
     piece_cache: Vec<u32>,
@@ -55,11 +55,11 @@ pub struct Peer<T: cio::CIO> {
     t_hash: [u8; 20],
     cid: Option<[u8; 20]>,
     rsv: Option<[u8; 8]>,
-    ext_ids: ExtIDs,
+    extension_ids: ExtensionIDs,
     pub rank: usize,
 }
 
-pub struct ExtIDs {
+pub struct ExtensionIDs {
     pub ut_meta: Option<u8>,
     pub ut_pex: Option<u8>,
 }
@@ -70,31 +70,31 @@ pub struct Status {
     pub interested: bool,
 }
 
-pub struct PeerConn {
-    last_action: time::Instant,
+pub struct PeerConnection {
+    last_action_time: time::Instant,
     sock: Socket,
     reader: Reader,
     writer: Writer,
 }
 
-impl PeerConn {
-    pub fn new(sock: Socket) -> PeerConn {
+impl PeerConnection {
+    pub fn new(sock: Socket) -> PeerConnection {
         let writer = Writer::new();
         let reader = Reader::new();
-        PeerConn {
+        PeerConnection {
             sock,
             writer,
             reader,
-            last_action: time::Instant::now(),
+            last_action_time: time::Instant::now(),
         }
     }
 
     #[cfg(test)]
-    pub fn test() -> PeerConn {
+    pub fn test() -> PeerConnection {
         let writer = Writer::new();
         let reader = Reader::new();
-        PeerConn {
-            last_action: time::Instant::now(),
+        PeerConnection {
+            last_action_time: time::Instant::now(),
             sock: Socket::empty(),
             writer,
             reader,
@@ -109,31 +109,31 @@ impl PeerConn {
         &mut self.sock
     }
 
-    pub fn last_action(&self) -> &time::Instant {
-        &self.last_action
+    pub fn last_action_time(&self) -> &time::Instant {
+        &self.last_action_time
     }
 
     /// Creates a new "outgoing" peer, which acts as a client.
     /// Once created, set_torrent should be called.
-    pub fn new_outgoing(ip: &SocketAddr) -> io::Result<PeerConn> {
-        Ok(PeerConn::new(Socket::new(ip)?))
+    pub fn new_outgoing(ip: &SocketAddr) -> io::Result<PeerConnection> {
+        Ok(PeerConnection::new(Socket::new(ip)?))
     }
 
     /// Creates a peer where we are acting as the server.
     /// Once the handshake is received, set_torrent should be called.
-    pub fn new_incoming(sock: TcpStream, reader: Reader) -> io::Result<PeerConn> {
-        let mut peer = PeerConn::new(Socket::from_stream(sock)?);
+    pub fn new_incoming(sock: TcpStream, reader: Reader) -> io::Result<PeerConnection> {
+        let mut peer = PeerConnection::new(Socket::from_stream(sock)?);
         peer.reader = reader;
         Ok(peer)
     }
 
     pub fn writable(&mut self) -> io::Result<()> {
-        self.last_action = time::Instant::now();
+        self.last_action_time = time::Instant::now();
         self.writer.writable(&mut self.sock)
     }
 
     pub fn readable(&mut self) -> RRes {
-        self.last_action = time::Instant::now();
+        self.last_action_time = time::Instant::now();
         self.reader.readable(&mut self.sock)
     }
 
@@ -156,14 +156,14 @@ impl Status {
 }
 
 #[cfg(test)]
-impl Peer<cio::test::TCIO> {
+impl Peer<cio::test::TestControlIO> {
     pub fn test(
         id: usize,
         uploaded: u32,
         downloaded: u32,
         queued: u16,
         pieces: Bitfield,
-    ) -> Peer<cio::test::TCIO> {
+    ) -> Peer<cio::test::TestControlIO> {
         let piece_count = pieces.iter().count();
         Peer {
             id,
@@ -173,7 +173,7 @@ impl Peer<cio::test::TCIO> {
             downloaded,
             stat: stat::EMA::new(),
             addr: "127.0.0.1:0".parse().unwrap(),
-            cio: cio::test::TCIO::new(),
+            control_io: cio::test::TestControlIO::new(),
             queued,
             max_queue: queued,
             pieces,
@@ -183,34 +183,34 @@ impl Peer<cio::test::TCIO> {
             t_hash: [0u8; 20],
             rsv: None,
             cid: None,
-            ext_ids: ExtIDs::new(),
+            extension_ids: ExtensionIDs::new(),
             pieces_updated: false,
             rank: 0,
         }
     }
 
-    pub fn test_from_pieces(id: usize, pieces: Bitfield) -> Peer<cio::test::TCIO> {
+    pub fn test_from_pieces(id: usize, pieces: Bitfield) -> Peer<cio::test::TestControlIO> {
         Peer::test(id, 0, 0, 0, pieces)
     }
 
-    pub fn test_from_stats(id: usize, ul: u32, dl: u32) -> Peer<cio::test::TCIO> {
+    pub fn test_from_stats(id: usize, ul: u32, dl: u32) -> Peer<cio::test::TestControlIO> {
         Peer::test(id, ul, dl, 0, Bitfield::new(4))
     }
 
-    pub fn test_with_tcio(mut cio: cio::test::TCIO) -> Peer<cio::test::TCIO> {
-        use control::cio::CIO;
+    pub fn test_with_tcio(mut cio: cio::test::TestControlIO) -> Peer<cio::test::TestControlIO> {
+        use control::cio::ControlIO;
 
-        let conn = PeerConn::test();
+        let conn = PeerConnection::test();
         let id = cio.add_peer(conn).unwrap();
         let mut peer = Peer::test(id, 0, 0, 0, Bitfield::new(4));
-        peer.cio = cio;
+        peer.control_io = cio;
         peer
     }
 }
 
-impl<T: cio::CIO> Peer<T> {
+impl<T: cio::ControlIO> Peer<T> {
     pub fn new(
-        mut conn: PeerConn,
+        mut conn: PeerConnection,
         t: &mut Torrent<T>,
         cid: Option<[u8; 20]>,
         rsv: Option<[u8; 8]>,
@@ -226,7 +226,7 @@ impl<T: cio::CIO> Peer<T> {
             uploaded: 0,
             downloaded: 0,
             stat: stat::EMA::new(),
-            cio: t.cio.new_handle(),
+            control_io: t.cio.new_handle(),
             queued: 0,
             max_queue: INIT_MAX_QUEUE,
             pieces: Bitfield::new(t.info.hashes.len() as u64),
@@ -236,7 +236,7 @@ impl<T: cio::CIO> Peer<T> {
             t_hash: t.info.hash,
             rsv,
             cid,
-            ext_ids: ExtIDs::new(),
+            extension_ids: ExtensionIDs::new(),
             pieces_updated: false,
             rank: t.num_peers(),
         };
@@ -248,7 +248,7 @@ impl<T: cio::CIO> Peer<T> {
         Ok(p)
     }
 
-    pub fn magnet_complete(&mut self, info: &Info) {
+    pub fn magnet_complete(&mut self, info: &TorrentInfo) {
         if self.pieces.len() == 0 {
             self.pieces = Bitfield::new(u64::from(info.pieces()));
         } else {
@@ -261,8 +261,8 @@ impl<T: cio::CIO> Peer<T> {
         self.cid.is_some()
     }
 
-    pub fn exts(&self) -> &ExtIDs {
-        &self.ext_ids
+    pub fn exts(&self) -> &ExtensionIDs {
+        &self.extension_ids
     }
 
     pub fn addr(&self) -> SocketAddr {
@@ -302,7 +302,7 @@ impl<T: cio::CIO> Peer<T> {
         if !self.stat.active() {
             return false;
         }
-        let dl = self.stat.avg_dl();
+        let dl = self.stat.avg_download();
         let rate = (dl / 1024) as u16;
         // Taken from rtorrent's pipeline calculation
         let nmq = if rate < 20 { rate + 2 } else { rate / 5 + 18 };
@@ -321,7 +321,7 @@ impl<T: cio::CIO> Peer<T> {
     }
 
     pub fn get_tx_rates(&self) -> (u64, u64) {
-        (self.stat.avg_ul(), self.stat.avg_dl())
+        (self.stat.avg_upload(), self.stat.avg_download())
     }
 
     pub fn queue_reqs(&mut self) -> Option<u16> {
@@ -393,7 +393,7 @@ impl<T: cio::CIO> Peer<T> {
                 self.send_message(Message::KeepAlive);
             }
             Message::Cancel { index, begin, .. } => {
-                self.cio.get_peer(self.id, |conn| {
+                self.control_io.get_peer(self.id, |conn| {
                     conn.writer.write_queue.retain(|m| {
                         if let Message::Piece {
                             index: i, begin: b, ..
@@ -408,7 +408,7 @@ impl<T: cio::CIO> Peer<T> {
             Message::Port(p) => {
                 let mut s = self.addr();
                 s.set_port(p);
-                self.cio.msg_trk(tracker::Request::AddNode(s));
+                self.control_io.msg_trk(tracker::Request::AddNode(s));
             }
             Message::Extension { id, ref payload } => {
                 if id == 0 {
@@ -421,11 +421,11 @@ impl<T: cio::CIO> Peer<T> {
                     let mut m = d.remove("m").and_then(|v| v.into_dict()).ok_or_else(|| {
                         ErrorKind::ProtocolError("Invalid metadata in in ext handshake")
                     })?;
-                    self.ext_ids.ut_meta = m
+                    self.extension_ids.ut_meta = m
                         .remove("ut_metadata")
                         .and_then(|v| v.into_int())
                         .map(|v| v as u8);
-                    self.ext_ids.ut_pex = m
+                    self.extension_ids.ut_pex = m
                         .remove("ut_pex")
                         .and_then(|v| v.into_int())
                         .map(|v| v as u8);
@@ -470,13 +470,13 @@ impl<T: cio::CIO> Peer<T> {
             }
             _ => {}
         }
-        self.cio.msg_peer(self.id, msg);
+        self.control_io.msg_peer(self.id, msg);
     }
 
     fn send_rpc_info(&mut self) {
         if let Some(cid) = self.cid {
             let id = util::peer_rpc_id(&self.t_hash, self.id as u64);
-            self.cio
+            self.control_io
                 .msg_rpc(rpc::CtlMessage::Extant(vec![resource::Resource::Peer(
                     resource::Peer {
                         id,
@@ -495,7 +495,7 @@ impl<T: cio::CIO> Peer<T> {
     fn send_rpc_update(&mut self) {
         if self.cid.is_some() {
             let id = util::peer_rpc_id(&self.t_hash, self.id as u64);
-            self.cio.msg_rpc(rpc::CtlMessage::Update(vec![
+            self.control_io.msg_rpc(rpc::CtlMessage::Update(vec![
                 resource::SResourceUpdate::PeerAvailability {
                     id,
                     kind: resource::ResourceKind::Peer,
@@ -507,7 +507,7 @@ impl<T: cio::CIO> Peer<T> {
 
     pub fn send_rpc_removal(&mut self) {
         if self.ready() {
-            self.cio
+            self.control_io
                 .msg_rpc(rpc::CtlMessage::Removed(vec![util::peer_rpc_id(
                     &self.t_hash,
                     self.id as u64,
@@ -516,13 +516,13 @@ impl<T: cio::CIO> Peer<T> {
     }
 }
 
-impl<T: cio::CIO> Drop for Peer<T> {
+impl<T: cio::ControlIO> Drop for Peer<T> {
     fn drop(&mut self) {
         self.send_rpc_removal();
     }
 }
 
-impl<T: cio::CIO> fmt::Debug for Peer<T> {
+impl<T: cio::ControlIO> fmt::Debug for Peer<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -532,9 +532,9 @@ impl<T: cio::CIO> fmt::Debug for Peer<T> {
     }
 }
 
-impl ExtIDs {
-    fn new() -> ExtIDs {
-        ExtIDs {
+impl ExtensionIDs {
+    fn new() -> ExtensionIDs {
+        ExtensionIDs {
             ut_meta: None,
             ut_pex: None,
         }
@@ -545,12 +545,12 @@ impl ExtIDs {
 mod tests {
     use super::Peer;
     use buffers::Buffer;
-    use control::cio::{test, CIO};
+    use control::cio::{test, ControlIO};
     use torrent::Message;
 
     #[test]
     fn test_cancel() {
-        let mut tcio = test::TCIO::new();
+        let mut tcio = test::TestControlIO::new();
         let mut peer = Peer::test_with_tcio(tcio.new_handle());
         let p1 = Message::Piece {
             index: 0,

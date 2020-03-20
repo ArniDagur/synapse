@@ -17,7 +17,7 @@ use super::proto::message::{CMessage, Error, SMessage};
 use super::proto::resource::{merge_json, Resource, ResourceKind, SResourceUpdate};
 use super::{CtlMessage, Message};
 use disk;
-use torrent::info::Info;
+use torrent::info::TorrentInfo;
 use util::{random_string, FHashMap, FHashSet, MHashSet, SHashMap};
 use CONFIG;
 
@@ -502,7 +502,7 @@ impl Processor {
                 uri,
                 path,
                 start,
-            } => match Info::from_magnet(&uri) {
+            } => match TorrentInfo::from_magnet(&uri) {
                 Ok(info) => {
                     rmsg = Some(Message::Torrent {
                         info,

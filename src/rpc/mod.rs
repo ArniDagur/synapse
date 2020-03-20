@@ -156,7 +156,7 @@ pub enum Message {
         serial: u64,
     },
     Torrent {
-        info: torrent::Info,
+        info: torrent::TorrentInfo,
         client: usize,
         serial: u64,
         path: Option<String>,
@@ -300,7 +300,7 @@ impl RPC {
                     return;
                 }
                 match bencode::decode_buf(&data) {
-                    Ok(b) => match torrent::info::Info::from_bencode(b) {
+                    Ok(b) => match torrent::info::TorrentInfo::from_bencode(b) {
                         Ok(i) => {
                             if self
                                 .ch

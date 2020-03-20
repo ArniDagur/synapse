@@ -59,7 +59,7 @@ fn init_threads() -> io::Result<Vec<thread::JoinHandle<()>>> {
     let (lh, lhj) = listener::Listener::start(&mut creg)?;
     let (rh, rhj) = rpc::RPC::start(&mut creg, disk_broadcast.clone())?;
     let (th, thj) = tracker::Tracker::start(&mut creg, disk_broadcast.clone())?;
-    let chans = acio::ACChans {
+    let chans = acio::AmyControlChannels {
         disk_tx: dh.tx,
         disk_rx: dh.rx,
         rpc_tx: rh.tx,
@@ -75,7 +75,7 @@ fn init_threads() -> io::Result<Vec<thread::JoinHandle<()>>> {
         .name("control".to_string())
         .spawn(move || {
             let throttler = throttle::Throttler::new(None, None, THROT_TOKS, &creg).unwrap();
-            let acio = acio::ACIO::new(cpoll, creg, chans);
+            let acio = acio::AmyControlIO::new(cpoll, creg, chans);
             match control::Control::new(acio, throttler, cdb) {
                 Ok(mut c) => {
                     tx.send(Ok(())).unwrap();

@@ -61,13 +61,13 @@ impl Picker {
         p
     }
 
-    pub fn add_peer<T: cio::CIO>(&mut self, peer: &Peer<T>) {
+    pub fn add_peer<T: cio::ControlIO>(&mut self, peer: &Peer<T>) {
         for idx in peer.pieces().iter() {
             self.piece_available(idx as u32);
         }
     }
 
-    pub fn remove_peer<T: cio::CIO>(&mut self, peer: &Peer<T>) {
+    pub fn remove_peer<T: cio::ControlIO>(&mut self, peer: &Peer<T>) {
         for idx in peer.pieces().iter() {
             self.piece_unavailable(idx as u32);
         }
@@ -110,7 +110,7 @@ impl Picker {
         self.swap_piece(idx, swap_idx);
     }
 
-    pub fn pick<T: cio::CIO>(&mut self, peer: &mut Peer<T>) -> Option<u32> {
+    pub fn pick<T: cio::ControlIO>(&mut self, peer: &mut Peer<T>) -> Option<u32> {
         while !peer.piece_cache().is_empty() {
             let p = peer.piece_cache().last().cloned().unwrap();
             if self.piece_idx[p as usize].status == PieceStatus::Complete {

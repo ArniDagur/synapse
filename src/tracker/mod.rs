@@ -317,7 +317,7 @@ impl Tracker {
 }
 
 impl Request {
-    pub fn new_announce<T: cio::CIO>(
+    pub fn new_announce<T: cio::ControlIO>(
         torrent: &Torrent<T>,
         event: Option<Event>,
     ) -> Option<Request> {
@@ -347,23 +347,23 @@ impl Request {
         }))
     }
 
-    pub fn started<T: cio::CIO>(torrent: &Torrent<T>) -> Option<Request> {
+    pub fn started<T: cio::ControlIO>(torrent: &Torrent<T>) -> Option<Request> {
         Request::new_announce(torrent, Some(Event::Started))
     }
 
-    pub fn stopped<T: cio::CIO>(torrent: &Torrent<T>) -> Option<Request> {
+    pub fn stopped<T: cio::ControlIO>(torrent: &Torrent<T>) -> Option<Request> {
         Request::new_announce(torrent, Some(Event::Stopped))
     }
 
-    pub fn completed<T: cio::CIO>(torrent: &Torrent<T>) -> Option<Request> {
+    pub fn completed<T: cio::ControlIO>(torrent: &Torrent<T>) -> Option<Request> {
         Request::new_announce(torrent, Some(Event::Completed))
     }
 
-    pub fn interval<T: cio::CIO>(torrent: &Torrent<T>) -> Option<Request> {
+    pub fn interval<T: cio::ControlIO>(torrent: &Torrent<T>) -> Option<Request> {
         Request::new_announce(torrent, None)
     }
 
-    pub fn custom<T: cio::CIO>(torrent: &Torrent<T>, url: Arc<Url>) -> Option<Request> {
+    pub fn custom<T: cio::ControlIO>(torrent: &Torrent<T>, url: Arc<Url>) -> Option<Request> {
         Request::new_announce(torrent, None).map(|mut r| {
             if let Request::Announce(ref mut a) = r {
                 a.url = url

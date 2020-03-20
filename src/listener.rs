@@ -77,7 +77,7 @@ impl Listener {
                 Ok(res) => {
                     for not in res {
                         match not.id {
-                            id if id == self.lid => self.handle_conn(),
+                            id if id == self.lid => self.handle_connection(),
                             id if id == self.ch.rx.get_id() => loop {
                                 match self.ch.recv() {
                                     Ok(Request::Ping) => continue,
@@ -94,7 +94,7 @@ impl Listener {
         }
     }
 
-    fn handle_conn(&mut self) {
+    fn handle_connection(&mut self) {
         loop {
             match self.listener.accept() {
                 Ok((conn, ip)) => {
@@ -102,8 +102,8 @@ impl Listener {
                     if conn.set_nonblocking(true).is_err() {
                         continue;
                     }
-                    if let Ok(pid) = self.reg.register(&conn, amy::Event::Read) {
-                        self.incoming.insert(pid, (conn, Reader::new()));
+                    if let Ok(peer_id) = self.reg.register(&conn, amy::Event::Read) {
+                        self.incoming.insert(peer_id, (conn, Reader::new()));
                     } else {
                         error!("IO poll error, dropping connection!");
                     }
@@ -118,18 +118,18 @@ impl Listener {
         }
     }
 
-    fn handle_peer(&mut self, not: amy::Notification) {
-        let pid = not.id;
+    fn handle_peer(&mut self, notification: amy::Notification) {
+        let peer_id = notification.id;
 
-        let res = {
-            let &mut (ref mut conn, ref mut reader) = self.incoming.get_mut(&pid).unwrap();
+        let result = {
+            let &mut (ref mut conn, ref mut reader) = self.incoming.get_mut(&peer_id).unwrap();
             reader.readable(conn)
         };
 
-        match res {
+        match result {
             RRes::Success(hs) => {
                 debug!("Completed handshake({:?}) with peer, transferring!", hs);
-                let (conn, reader) = self.incoming.remove(&pid).unwrap();
+                let (conn, reader) = self.incoming.remove(&peer_id).unwrap();
                 if self.reg.deregister(&conn).is_err() {
                     error!("IO poll error, dropping connection!");
                     return;
@@ -152,7 +152,7 @@ impl Listener {
             RRes::Blocked => {}
             RRes::Err(_) | RRes::Stalled => {
                 debug!("Peer connection failed!");
-                self.incoming.remove(&pid);
+                self.incoming.remove(&peer_id);
             }
         }
     }

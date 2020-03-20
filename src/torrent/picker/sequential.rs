@@ -69,7 +69,7 @@ impl Picker {
         }
     }
 
-    pub fn pick<T: cio::CIO>(&mut self, peer: &Peer<T>) -> Option<u32> {
+    pub fn pick<T: cio::ControlIO>(&mut self, peer: &Peer<T>) -> Option<u32> {
         self.pieces[self.piece_idx..]
             .iter()
             .find(|p| peer.pieces().has_bit(u64::from(p.pos)))

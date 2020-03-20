@@ -13,7 +13,7 @@ use openssl::sha;
 use super::{BufCache, FileCache, JOB_TIME_SLICE};
 use buffers::Buffer;
 use socket::TSocket;
-use torrent::{Info, LocIter};
+use torrent::{TorrentInfo, LocIter};
 use util::{awrite, hash_to_id, io_err, IOR};
 use CONFIG;
 
@@ -31,7 +31,7 @@ pub struct Location {
     pub end: usize,
     /// This file should be fully allocated if possible
     pub allocate: bool,
-    info: Arc<Info>,
+    info: Arc<TorrentInfo>,
 }
 
 pub enum Request {
@@ -67,14 +67,14 @@ pub enum Request {
     },
     Validate {
         tid: usize,
-        info: Arc<Info>,
+        info: Arc<TorrentInfo>,
         path: Option<String>,
         idx: u32,
         invalid: Vec<u32>,
     },
     ValidatePiece {
         tid: usize,
-        info: Arc<Info>,
+        info: Arc<TorrentInfo>,
         path: Option<String>,
         piece: u32,
     },
@@ -111,7 +111,7 @@ pub enum Response {
 }
 
 pub struct Ctx {
-    pub pid: usize,
+    pub peer_id: usize,
     pub tid: usize,
     pub idx: u32,
     pub begin: u32,
@@ -149,7 +149,7 @@ impl Request {
         Request::Serialize { tid, data, hash }
     }
 
-    pub fn validate(tid: usize, info: Arc<Info>, path: Option<String>) -> Request {
+    pub fn validate(tid: usize, info: Arc<TorrentInfo>, path: Option<String>) -> Request {
         Request::Validate {
             tid,
             info,
@@ -161,7 +161,7 @@ impl Request {
 
     pub fn validate_piece(
         tid: usize,
-        info: Arc<Info>,
+        info: Arc<TorrentInfo>,
         path: Option<String>,
         piece: u32,
     ) -> Request {
@@ -441,7 +441,7 @@ impl Request {
             } => {
                 let buf = tb.get(info.piece_len as usize);
                 let mut ctx = sha::Sha1::new();
-                let locs = Info::piece_disk_locs(&info, piece);
+                let locs = TorrentInfo::piece_disk_locs(&info, piece);
                 for loc in locs {
                     let pb = tpb.get(path.as_ref().unwrap_or(dd));
                     pb.push(loc.path());
@@ -471,7 +471,7 @@ impl Request {
                 {
                     let mut valid = true;
                     let mut ctx = sha::Sha1::new();
-                    let locs = Info::piece_disk_locs(&info, idx);
+                    let locs = TorrentInfo::piece_disk_locs(&info, idx);
                     for loc in locs {
                         if !valid {
                             break;
@@ -670,7 +670,7 @@ impl Location {
         offset: u64,
         start: u64,
         end: u64,
-        info: Arc<Info>,
+        info: Arc<TorrentInfo>,
         allocate: bool,
     ) -> Location {
         Location {
@@ -736,9 +736,9 @@ impl fmt::Debug for Response {
 }
 
 impl Ctx {
-    pub fn new(pid: usize, tid: usize, idx: u32, begin: u32, length: u32) -> Ctx {
+    pub fn new(peer_id: usize, tid: usize, idx: u32, begin: u32, length: u32) -> Ctx {
         Ctx {
-            pid,
+            peer_id: peer_id,
             tid,
             idx,
             begin,

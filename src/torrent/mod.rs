@@ -19,9 +19,9 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use url::Url;
 
 pub use self::bitfield::Bitfield;
-pub use self::info::{Info, LocIter};
+pub use self::info::{TorrentInfo, LocIter};
 pub use self::peer::Message;
-pub use self::peer::{Peer, PeerConn};
+pub use self::peer::{Peer, PeerConnection};
 pub use self::picker::Block;
 
 use self::picker::Picker;
@@ -48,11 +48,11 @@ pub enum TrackerStatus {
     Failure(String),
 }
 
-pub struct Torrent<T: cio::CIO> {
+pub struct Torrent<T: cio::ControlIO> {
     id: usize,
     pieces: Bitfield,
     validating: FHashSet<u32>,
-    info: Arc<Info>,
+    info: Arc<TorrentInfo>,
     cio: T,
     uploaded: u64,
     downloaded: u64,
@@ -75,13 +75,6 @@ pub struct Torrent<T: cio::CIO> {
     created: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug)]
-pub struct Status {
-    pub paused: bool,
-    pub validating: Option<f32>,
-    pub error: Option<String>,
-    pub state: StatusState,
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum StatusState {
@@ -98,31 +91,34 @@ pub struct Tracker {
     pub update: Option<Instant>,
 }
 
-struct Files {
-    done: Vec<u64>,
-    dirty: FHashSet<usize>,
+#[derive(Clone, Debug)]
+pub struct Status {
+    pub paused: bool,
+    pub validating: Option<f32>,
+    pub error: Option<String>,
+    pub state: StatusState,
 }
 
 impl Status {
-    pub fn magnet(&self) -> bool {
+    pub fn is_magnet(&self) -> bool {
         match self.state {
             StatusState::Magnet => true,
             _ => false,
         }
     }
 
-    pub fn leeching(&self) -> bool {
+    pub fn is_leeching(&self) -> bool {
         match self.state {
             StatusState::Incomplete => true,
             _ => false,
         }
     }
 
-    pub fn stopped(&self) -> bool {
+    pub fn is_stopped(&self) -> bool {
         self.paused || self.error.is_some()
     }
 
-    pub fn completed(&self) -> bool {
+    pub fn is_completed(&self) -> bool {
         match self.state {
             StatusState::Complete => self.validating.is_none(),
             _ => false,
@@ -130,7 +126,7 @@ impl Status {
     }
 
     pub fn should_dl(&self) -> bool {
-        self.leeching() && !self.stopped() && self.validating.is_none()
+        self.is_leeching() && !self.is_stopped() && self.validating.is_none()
     }
 
     pub fn as_rpc(&self, ul: u64, dl: u64) -> rpc::resource::Status {
@@ -164,8 +160,13 @@ impl Status {
     }
 }
 
+struct Files {
+    done: Vec<u64>,
+    dirty: FHashSet<usize>,
+}
+
 impl Files {
-    fn new(info: &Arc<Info>, pieces: &Bitfield) -> Files {
+    fn new(info: &Arc<TorrentInfo>, pieces: &Bitfield) -> Files {
         let mut f = Files {
             done: vec![0; info.files.len()],
             dirty: FHashSet::default(),
@@ -174,13 +175,13 @@ impl Files {
         f
     }
 
-    fn rebuild(&mut self, info: &Arc<Info>, pieces: &Bitfield) {
+    fn rebuild(&mut self, info: &Arc<TorrentInfo>, pieces: &Bitfield) {
         for amnt in &mut self.done {
             *amnt = 0;
         }
 
         for p in pieces.iter() {
-            for loc in Info::piece_disk_locs(info, p as u32) {
+            for loc in TorrentInfo::piece_disk_locs(info, p as u32) {
                 self.done[loc.file] += (loc.end - loc.start) as u64;
             }
         }
@@ -190,8 +191,8 @@ impl Files {
         }
     }
 
-    fn update(&mut self, info: &Arc<Info>, piece: u32) {
-        for loc in Info::piece_disk_locs(info, piece) {
+    fn update(&mut self, info: &Arc<TorrentInfo>, piece: u32) {
+        for loc in TorrentInfo::piece_disk_locs(info, piece) {
             self.done[loc.file] += (loc.end - loc.start) as u64;
             self.dirty.insert(loc.file);
         }
@@ -206,11 +207,11 @@ impl Files {
     }
 }
 
-impl<T: cio::CIO> Torrent<T> {
+impl<T: cio::ControlIO> Torrent<T> {
     pub fn new(
         id: usize,
         path: Option<String>,
-        info: Info,
+        info: TorrentInfo,
         throttle: Throttle,
         cio: T,
         start: bool,
@@ -329,7 +330,7 @@ impl<T: cio::CIO> Torrent<T> {
         let peers = UHashMap::default();
         let leechers = FHashSet::default();
 
-        let info = Arc::new(Info {
+        let info = Arc::new(TorrentInfo {
             name: d.info.name,
             announce: d
                 .info
@@ -587,7 +588,7 @@ impl<T: cio::CIO> Torrent<T> {
     }
 
     pub fn try_update_tracker(&mut self) {
-        if self.status.stopped() {
+        if self.status.is_stopped() {
             return;
         }
         if let Some(end) = self.trackers.front().and_then(|t| t.update) {
@@ -602,7 +603,7 @@ impl<T: cio::CIO> Torrent<T> {
     }
 
     pub fn update_tracker(&mut self) {
-        if self.status.stopped() {
+        if self.status.is_stopped() {
             return;
         }
         if let Some(req) = tracker::Request::interval(self) {
@@ -695,7 +696,7 @@ impl<T: cio::CIO> Torrent<T> {
         self.downloaded
     }
 
-    pub fn info(&self) -> &Info {
+    pub fn info(&self) -> &TorrentInfo {
         &self.info
     }
 
@@ -703,11 +704,11 @@ impl<T: cio::CIO> Torrent<T> {
         &self.trackers
     }
 
-    pub fn handle_disk_resp(&mut self, resp: disk::Response) {
-        match resp {
+    pub fn handle_disk_resp(&mut self, response: disk::Response) {
+        match response {
             disk::Response::Read { context, data } => {
                 trace!("Received piece from disk, uploading!");
-                if let Some(peer) = self.peers.get_mut(&context.pid) {
+                if let Some(peer) = self.peers.get_mut(&context.peer_id) {
                     let p = Message::s_piece(context.idx, context.begin, context.length, data);
                     // This may not be 100% accurate, but close enough for now.
                     self.uploaded += u64::from(context.length);
@@ -748,8 +749,8 @@ impl<T: cio::CIO> Torrent<T> {
                     self.pieces.set_bit(u64::from(piece));
                     // Tell all relevant peers we got the piece
                     let m = Message::Have(piece);
-                    for pid in &self.leechers {
-                        if let Some(peer) = self.peers.get_mut(pid) {
+                    for peer_id in &self.leechers {
+                        if let Some(peer) = self.peers.get_mut(peer_id) {
                             if !peer.pieces().has_bit(u64::from(piece)) {
                                 peer.send_message(m.clone());
                             }
@@ -777,13 +778,13 @@ impl<T: cio::CIO> Torrent<T> {
                 // part of an invalid file(none of the disk locations
                 // refer to files which aren't being downloaded(pri. 1)
                 invalid.retain(|i| {
-                    Info::piece_disk_locs(&self.info, *i).any(|loc| self.priorities[loc.file] != 0)
+                    TorrentInfo::piece_disk_locs(&self.info, *i).any(|loc| self.priorities[loc.file] != 0)
                 });
                 if invalid.is_empty() {
                     debug!("Torrent succesfully validated!");
                     if !self.complete() {
                         for i in 0..self.pieces.len() {
-                            let complete = Info::piece_disk_locs(&self.info, i as u32)
+                            let complete = TorrentInfo::piece_disk_locs(&self.info, i as u32)
                                 .any(|loc| self.priorities[loc.file] != 0);
                             if complete {
                                 self.pieces.set_bit(i);
@@ -801,7 +802,7 @@ impl<T: cio::CIO> Torrent<T> {
                         // picker to use the new bitfield
                         if invalid.len() != self.pieces.len() as usize {
                             for i in 0..self.pieces.len() {
-                                let complete = Info::piece_disk_locs(&self.info, i as u32)
+                                let complete = TorrentInfo::piece_disk_locs(&self.info, i as u32)
                                     .any(|loc| self.priorities[loc.file] != 0);
                                 if complete {
                                     self.pieces.set_bit(i);
@@ -846,7 +847,7 @@ impl<T: cio::CIO> Torrent<T> {
     fn check_complete(&mut self) {
         let mut complete = true;
         for piece in 0..self.pieces.len() {
-            let no_dl = Info::piece_disk_locs(&self.info, piece as u32)
+            let no_dl = TorrentInfo::piece_disk_locs(&self.info, piece as u32)
                 .all(|loc| self.priorities[loc.file] == 0);
             if self.pieces.has_bit(piece as u64) || no_dl {
                 continue;
@@ -900,8 +901,8 @@ impl<T: cio::CIO> Torrent<T> {
         }
 
         // Due to how we do validation updates, we should tell peers we now have every single piece
-        for pid in leechers {
-            if let Some(peer) = self.peers.get_mut(pid) {
+        for peer_id in leechers {
+            if let Some(peer) = self.peers.get_mut(peer_id) {
                 for i in 0..self.pieces.len() {
                     if !peer.pieces().has_bit(i) {
                         peer.send_message(Message::Have(i as u32));
@@ -911,13 +912,13 @@ impl<T: cio::CIO> Torrent<T> {
         }
     }
 
-    pub fn peer_ev(&mut self, pid: cio::PID, evt: cio::Result<Message>) -> Result<(), ()> {
+    pub fn peer_ev(&mut self, peer_id: cio::PeerID, evt: cio::Result<Message>) -> Result<(), ()> {
         // TODO: Consider Boxing peers so it's just pointer insert/removal
-        let mut peer = self.peers.remove(&pid).ok_or(())?;
+        let mut peer = self.peers.remove(&peer_id).ok_or(())?;
         match evt {
             Ok(mut msg) => {
                 if peer.handle_msg(&mut msg).is_ok() && self.handle_msg(msg, &mut peer).is_ok() {
-                    self.peers.insert(pid, peer);
+                    self.peers.insert(peer_id, peer);
                     return Ok(());
                 } else {
                     // In order to ensure there's only one source of truth,
@@ -925,15 +926,15 @@ impl<T: cio::CIO> Torrent<T> {
                     // We then will receieve it later and call cleanup_peer as needed.
                     // This ensures that events flow from control -> torrent and get
                     // properly processed
-                    self.cio.remove_peer(pid);
-                    self.peers.insert(pid, peer);
+                    self.cio.remove_peer(peer_id);
+                    self.peers.insert(peer_id, peer);
                     return Ok(());
                 }
             }
             Err(e) => {
                 trace!(
                     "Removing peer {}, {}",
-                    util::peer_rpc_id(&self.info.hash, pid as u64),
+                    util::peer_rpc_id(&self.info.hash, peer_id as u64),
                     e
                 );
                 self.cleanup_peer(&mut peer);
@@ -1022,7 +1023,7 @@ impl<T: cio::CIO> Torrent<T> {
 
                 // Even though we have the data, if we are stopped we shouldn't use the disk
                 // regardless.
-                if self.status.stopped() || self.status.completed() {
+                if self.status.is_stopped() || self.status.is_completed() {
                     return Ok(());
                 }
 
@@ -1041,8 +1042,8 @@ impl<T: cio::CIO> Torrent<T> {
                     let picker = &mut self.picker;
                     let peers = &mut self.peers;
 
-                    picker.completed(Block::new(index, begin), |pid| {
-                        if let Some(p) = peers.get_mut(&pid) {
+                    picker.completed(Block::new(index, begin), |peer_id| {
+                        if let Some(p) = peers.get_mut(&peer_id) {
                             p.send_message(Message::Cancel {
                                 index,
                                 begin,
@@ -1088,7 +1089,7 @@ impl<T: cio::CIO> Torrent<T> {
                 if length != self.info.block_len(index, begin) {
                     return Err(());
                 }
-                if !self.status.stopped() {
+                if !self.status.is_stopped() {
                     if let Some(buf) = Buffer::get() {
                         self.request_read(peer.id(), index, begin, buf);
                         return Ok(());
@@ -1233,7 +1234,7 @@ impl<T: cio::CIO> Torrent<T> {
                             );
                             b.insert("info".to_owned(), bni);
                             let ni =
-                                Info::from_bencode(bencode::BEncode::Dict(b)).map_err(|_| ())?;
+                                TorrentInfo::from_bencode(bencode::BEncode::Dict(b)).map_err(|_| ())?;
                             if ni.hash == self.info.hash {
                                 debug!("Magnet file acquired succesfully!");
                                 self.info_idx = None;
@@ -1401,7 +1402,7 @@ impl<T: cio::CIO> Torrent<T> {
     }
 
     fn announce_start(&mut self) {
-        if self.status.stopped() {
+        if self.status.is_stopped() {
             return;
         }
         if let Some(req) = tracker::Request::started(self) {
@@ -1412,7 +1413,7 @@ impl<T: cio::CIO> Torrent<T> {
     }
 
     fn dht_announce(&mut self) {
-        if self.status.stopped() {
+        if self.status.is_stopped() {
             return;
         }
         if !self.info.private {
@@ -1427,7 +1428,7 @@ impl<T: cio::CIO> Torrent<T> {
     }
 
     pub fn complete(&self) -> bool {
-        self.status.completed()
+        self.status.is_completed()
     }
 
     fn set_throttle(&mut self, ul: Option<i64>, dl: Option<i64>) {
@@ -1529,7 +1530,7 @@ impl<T: cio::CIO> Torrent<T> {
             path: self.path.as_ref().unwrap_or(&CONFIG.disk.directory).clone(),
             created: self.created,
             modified: Utc::now(),
-            status: self.status.as_rpc(self.stat.avg_ul(), self.stat.avg_dl()),
+            status: self.status.as_rpc(self.stat.avg_upload(), self.stat.avg_download()),
             error: self.error(),
             priority: self.priority,
             progress: self.progress(),
@@ -1566,7 +1567,7 @@ impl<T: cio::CIO> Torrent<T> {
         }
 
         for p in self.pieces.iter() {
-            for loc in Info::piece_disk_locs(&self.info, p as u32) {
+            for loc in TorrentInfo::piece_disk_locs(&self.info, p as u32) {
                 files[loc.file].0 += loc.end - loc.start;
             }
         }
@@ -1645,7 +1646,7 @@ impl<T: cio::CIO> Torrent<T> {
     }
 
     fn progress(&self) -> f32 {
-        if self.status.magnet() {
+        if self.status.is_magnet() {
             return 0.0;
         }
         if let Some(amnt) = self.status.validating {
@@ -1659,7 +1660,7 @@ impl<T: cio::CIO> Torrent<T> {
         if self.leechers.len() != self.peers.len() {
             return 1.0;
         }
-        if self.status.magnet() {
+        if self.status.is_magnet() {
             return 0.0;
         }
         let mut peers_have = FHashSet::default();
@@ -1688,38 +1689,38 @@ impl<T: cio::CIO> Torrent<T> {
     }
 
     pub fn get_last_tx_rate(&self) -> (u64, u64) {
-        (self.stat.avg_ul(), self.stat.avg_dl())
+        (self.stat.avg_upload(), self.stat.avg_download())
     }
 
     /// Writes a piece of torrent info, with piece index idx,
     /// piece offset begin, piece length of len, and data bytes.
     /// The disk send handle is also provided.
     fn write_piece(&mut self, index: u32, begin: u32, data: Buffer) {
-        let locs = Info::block_disk_locs_pri(&self.info, &self.priorities, index, begin);
+        let locs = TorrentInfo::block_disk_locs_pri(&self.info, &self.priorities, index, begin);
         self.cio
             .msg_disk(disk::Request::write(self.id, data, locs, self.path.clone()));
     }
 
     /// Issues a read request of the given torrent
     fn request_read(&mut self, id: usize, index: u32, begin: u32, data: Buffer) {
-        let locs = Info::block_disk_locs(&self.info, index, begin);
+        let locs = TorrentInfo::block_disk_locs(&self.info, index, begin);
         let len = self.info.block_len(index, begin);
         let ctx = disk::Ctx::new(id, self.id, index, begin, len);
         self.cio
             .msg_disk(disk::Request::read(ctx, data, locs, self.path.clone()));
     }
 
-    fn make_requests_pid(&mut self, pid: usize) {
+    fn make_requests_peer_id(&mut self, peer_id: usize) {
         if self.status.should_dl() {
             let peer = self
                 .peers
-                .get_mut(&pid)
+                .get_mut(&peer_id)
                 .expect("Expected peer id not present");
             Torrent::make_requests(peer, &mut self.picker, &self.info);
         }
     }
 
-    fn make_requests(peer: &mut Peer<T>, picker: &mut Picker, info: &Info) {
+    fn make_requests(peer: &mut Peer<T>, picker: &mut Picker, info: &TorrentInfo) {
         if let Some(m) = peer.queue_reqs() {
             for _ in 0..(m) {
                 if let Some(block) = picker.pick(peer) {
@@ -1737,37 +1738,37 @@ impl<T: cio::CIO> Torrent<T> {
         }
     }
 
-    pub fn add_peer(&mut self, conn: PeerConn) -> Option<usize> {
+    pub fn add_peer(&mut self, conn: PeerConnection) -> Option<usize> {
         if self.peers.len() >= MAX_PEERS {
             return None;
         }
         if self.peers.values().any(|p| p.addr() == conn.sock().addr()) {
             return None;
         }
-        if let Ok(p) = Peer::new(conn, self, None, None) {
-            let pid = p.id();
+        if let Ok(peer) = Peer::new(conn, self, None, None) {
+            let peer_id = peer.id();
             if self.info_idx.is_none() {
-                self.picker.add_peer(&p);
+                self.picker.add_peer(&peer);
             }
-            self.peers.insert(pid, p);
-            Some(pid)
+            self.peers.insert(peer_id, peer);
+            Some(peer_id)
         } else {
             None
         }
     }
 
-    pub fn add_inc_peer(&mut self, conn: PeerConn, id: [u8; 20], rsv: [u8; 8]) -> Option<usize> {
+    pub fn add_inc_peer(&mut self, conn: PeerConnection, id: [u8; 20], rsv: [u8; 8]) -> Option<usize> {
         if self.peers.values().any(|p| p.addr() == conn.sock().addr()) {
             return None;
         }
-        if let Ok(p) = Peer::new(conn, self, Some(id), Some(rsv)) {
-            let pid = p.id();
-            debug!("Adding peer {:?}!", pid);
+        if let Ok(peer) = Peer::new(conn, self, Some(id), Some(rsv)) {
+            let peer_id = peer.id();
+            debug!("Adding peer {:?}!", peer_id);
             if self.info_idx.is_none() {
-                self.picker.add_peer(&p);
+                self.picker.add_peer(&peer);
             }
-            self.peers.insert(pid, p);
-            Some(pid)
+            self.peers.insert(peer_id, peer);
+            Some(peer_id)
         } else {
             None
         }
@@ -1780,7 +1781,7 @@ impl<T: cio::CIO> Torrent<T> {
                 id,
                 kind: resource::ResourceKind::Torrent,
                 error: self.status.error.clone(),
-                status: self.status.as_rpc(self.stat.avg_ul(), self.stat.avg_dl()),
+                status: self.status.as_rpc(self.stat.avg_upload(), self.stat.avg_download()),
             },
         ]));
     }
@@ -1834,13 +1835,13 @@ impl<T: cio::CIO> Torrent<T> {
             progress,
         });
 
-        for (pid, p) in &mut self.peers {
-            if !p.active() {
+        for (peer_id, peer) in &mut self.peers {
+            if !peer.active() {
                 continue;
             }
-            let (rate_up, rate_down) = p.get_tx_rates();
+            let (rate_up, rate_down) = peer.get_tx_rates();
             updates.push(SResourceUpdate::Rate {
-                id: util::peer_rpc_id(&self.info.hash, *pid as u64),
+                id: util::peer_rpc_id(&self.info.hash, *peer_id as u64),
                 kind: resource::ResourceKind::Peer,
                 rate_up,
                 rate_down,
@@ -1963,30 +1964,30 @@ impl<T: cio::CIO> Torrent<T> {
     }
 
     pub fn rank_peers(&mut self) {
-        let mut pids = self.pids();
-        pids.sort_by_key(|pid| self.peers.get(pid).unwrap().get_tx_rates().1);
-        pids.reverse();
-        if !pids.is_empty() {
+        let mut peer_ids = self.peer_ids();
+        peer_ids.sort_by_key(|peer_id| self.peers.get(peer_id).unwrap().get_tx_rates().1);
+        peer_ids.reverse();
+        if !peer_ids.is_empty() {
             debug!(
                 "Lowest ranked peer dl {}",
-                self.peers[&pids[0]].get_tx_rates().1
+                self.peers[&peer_ids[0]].get_tx_rates().1
             );
         }
-        for (rank, pid) in pids.into_iter().enumerate() {
-            self.peers.get_mut(&pid).unwrap().rank = rank;
+        for (rank, peer_id) in peer_ids.into_iter().enumerate() {
+            self.peers.get_mut(&peer_id).unwrap().rank = rank;
         }
     }
 
     fn request_all(&mut self) {
-        if self.status.stopped() || self.info_idx.is_some() {
+        if self.status.is_stopped() || self.info_idx.is_some() {
             return;
         }
-        for pid in self.pids() {
-            self.make_requests_pid(pid);
+        for peer_id in self.peer_ids() {
+            self.make_requests_peer_id(peer_id);
         }
     }
 
-    fn pids(&self) -> Vec<usize> {
+    fn peer_ids(&self) -> Vec<usize> {
         self.peers.keys().cloned().collect()
     }
 
@@ -2023,19 +2024,19 @@ impl<T: cio::CIO> Torrent<T> {
     }
 }
 
-impl<T: cio::CIO> fmt::Debug for Torrent<T> {
+impl<T: cio::ControlIO> fmt::Debug for Torrent<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Torrent {{ info: {:?} }}", self.info)
     }
 }
 
-impl<T: cio::CIO> fmt::Display for Torrent<T> {
+impl<T: cio::ControlIO> fmt::Display for Torrent<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Torrent {}", util::hash_to_id(&self.info.hash[..]))
     }
 }
 
-impl<T: cio::CIO> Drop for Torrent<T> {
+impl<T: cio::ControlIO> Drop for Torrent<T> {
     fn drop(&mut self) {
         for (id, peer) in self.peers.drain() {
             trace!("Removing peer {:?}", peer);

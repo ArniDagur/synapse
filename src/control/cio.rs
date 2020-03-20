@@ -19,13 +19,13 @@ error_chain! {
     }
 }
 
-pub type PID = usize;
+pub type PeerID = usize;
 pub type TID = usize;
 
 pub enum Event {
     Timer(TID),
     Peer {
-        peer: PID,
+        peer: PeerID,
         event: Result<torrent::Message>,
     },
     RPC(Result<rpc::Message>),
@@ -37,7 +37,7 @@ pub enum Event {
 /// Control IO trait used as an abstraction boundary between
 /// the actual logic of the torrent client and the IO that needs
 /// to be done.
-pub trait CIO {
+pub trait ControlIO {
     /// Returns events for peers, timers, channels, etc.
     fn poll(&mut self, events: &mut Vec<Event>) -> Result<()>;
 
@@ -45,22 +45,22 @@ pub trait CIO {
     fn propagate(&mut self, event: Event);
 
     /// Adds a peer to be polled on
-    fn add_peer(&mut self, peer: torrent::PeerConn) -> Result<PID>;
+    fn add_peer(&mut self, peer: torrent::PeerConnection) -> Result<PeerID>;
 
     /// Applies f to a peer if it exists
-    fn get_peer<T, F: FnOnce(&mut torrent::PeerConn) -> T>(&mut self, peer: PID, f: F)
+    fn get_peer<T, F: FnOnce(&mut torrent::PeerConnection) -> T>(&mut self, peer: PeerID, f: F)
         -> Option<T>;
 
     /// Removes a peer - This will trigger an error being
     /// reported at the next poll time, clients should wait
     /// for this to occur before internally removing the peer.
-    fn remove_peer(&self, peer: PID);
+    fn remove_peer(&self, peer: PeerID);
 
     /// Flushes events on the given vec of peers
-    fn flush_peers(&mut self, peers: Vec<PID>);
+    fn flush_peers(&mut self, peers: Vec<PeerID>);
 
     /// Sends a message to a peer
-    fn msg_peer(&mut self, peer: PID, msg: torrent::Message);
+    fn msg_peer(&mut self, peer: PeerID, msg: torrent::Message);
 
     /// Sends a message over RPC
     fn msg_rpc(&mut self, msg: rpc::CtlMessage);
@@ -83,20 +83,20 @@ pub trait CIO {
 
 #[cfg(test)]
 pub mod test {
-    use super::{Event, Result, CIO, PID, TID};
+    use super::{Event, Result, ControlIO, PeerID, TID};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use {disk, listener, rpc, torrent, tracker};
 
-    pub struct TCIO {
-        data: Arc<Mutex<TCIOD>>,
+    pub struct TestControlIO {
+        data: Arc<Mutex<TestControlIOD>>,
     }
 
     /// A reference CIO implementation which serves as a test mock
-    pub struct TCIOD {
-        pub peers: HashMap<PID, torrent::PeerConn>,
-        pub peer_msgs: Vec<(PID, torrent::Message)>,
-        pub flushed_peers: Vec<PID>,
+    pub struct TestControlIOD {
+        pub peers: HashMap<PeerID, torrent::PeerConnection>,
+        pub peer_msgs: Vec<(PeerID, torrent::Message)>,
+        pub flushed_peers: Vec<PeerID>,
         pub rpc_msgs: Vec<rpc::CtlMessage>,
         pub trk_msgs: Vec<tracker::Request>,
         pub disk_msgs: Vec<disk::Request>,
@@ -105,9 +105,9 @@ pub mod test {
         pub peer_cnt: usize,
     }
 
-    impl TCIO {
-        pub fn new() -> TCIO {
-            let d = TCIOD {
+    impl TestControlIO {
+        pub fn new() -> TestControlIO {
+            let d = TestControlIOD {
                 peers: HashMap::new(),
                 peer_msgs: Vec::new(),
                 flushed_peers: Vec::new(),
@@ -118,20 +118,20 @@ pub mod test {
                 timers: 0,
                 peer_cnt: 0,
             };
-            TCIO {
+            TestControlIO {
                 data: Arc::new(Mutex::new(d)),
             }
         }
     }
 
-    impl CIO for TCIO {
+    impl ControlIO for TestControlIO {
         fn poll(&mut self, _: &mut Vec<Event>) -> Result<()> {
             return Ok(());
         }
 
         fn propagate(&mut self, _: Event) {}
 
-        fn add_peer(&mut self, peer: torrent::PeerConn) -> Result<PID> {
+        fn add_peer(&mut self, peer: torrent::PeerConnection) -> Result<PeerID> {
             let mut d = self.data.lock().unwrap();
             let id = d.peer_cnt;
             d.peers.insert(id, peer);
@@ -139,30 +139,30 @@ pub mod test {
             Ok(id)
         }
 
-        fn get_peer<T, F: FnOnce(&mut torrent::PeerConn) -> T>(
+        fn get_peer<T, F: FnOnce(&mut torrent::PeerConnection) -> T>(
             &mut self,
-            pid: PID,
+            peer_id: PeerID,
             f: F,
         ) -> Option<T> {
             let mut d = self.data.lock().unwrap();
-            if let Some(p) = d.peers.get_mut(&pid) {
-                Some(f(p))
+            if let Some(peer_connection) = d.peers.get_mut(&peer_id) {
+                Some(f(peer_connection))
             } else {
                 None
             }
         }
 
-        fn remove_peer(&self, peer: PID) {
+        fn remove_peer(&self, peer: PeerID) {
             let mut d = self.data.lock().unwrap();
             d.peers.remove(&peer);
         }
 
-        fn flush_peers(&mut self, mut peers: Vec<PID>) {
+        fn flush_peers(&mut self, mut peers: Vec<PeerID>) {
             let mut d = self.data.lock().unwrap();
             d.flushed_peers.extend(peers.drain(..));
         }
 
-        fn msg_peer(&mut self, peer: PID, msg: torrent::Message) {
+        fn msg_peer(&mut self, peer: PeerID, msg: torrent::Message) {
             let mut d = self.data.lock().unwrap();
             d.peer_msgs.push((peer, msg.clone()));
             if let Some(p) = d.peers.get_mut(&peer) {
@@ -198,7 +198,7 @@ pub mod test {
         }
 
         fn new_handle(&self) -> Self {
-            TCIO {
+            TestControlIO {
                 data: self.data.clone(),
             }
         }

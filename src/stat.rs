@@ -28,11 +28,11 @@ impl EMA {
         self.accum_ul > 0.1 || self.accum_dl > 0.1
     }
 
-    pub fn avg_ul(&self) -> u64 {
+    pub fn avg_upload(&self) -> u64 {
         (1000.0 * self.accum_ul / self.accum_time) as u64
     }
 
-    pub fn avg_dl(&self) -> u64 {
+    pub fn avg_download(&self) -> u64 {
         (1000.0 * self.accum_dl / self.accum_time) as u64
     }
 
@@ -78,6 +78,6 @@ mod tests {
         thread::sleep(time::Duration::from_millis(50));
         s.tick();
 
-        assert!((s.avg_ul() as i64 - 10000).abs() < 8000);
+        assert!((s.avg_upload() as i64 - 10000).abs() < 8000);
     }
 }

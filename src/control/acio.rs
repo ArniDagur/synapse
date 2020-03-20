@@ -14,11 +14,11 @@ const POLL_INT_MS: usize = 1000;
 const PRUNE_GOAL: usize = 50;
 
 /// Amy based CIO implementation. Currently the default one used.
-pub struct ACIO {
-    data: Rc<RefCell<ACIOData>>,
+pub struct AmyControlIO {
+    data: Rc<RefCell<AmyControlIOData>>,
 }
 
-pub struct ACChans {
+pub struct AmyControlChannels {
     pub disk_tx: amy::Sender<disk::Request>,
     pub disk_rx: amy::Receiver<disk::Response>,
 
@@ -32,18 +32,18 @@ pub struct ACChans {
     pub lst_rx: amy::Receiver<listener::Message>,
 }
 
-struct ACIOData {
+struct AmyControlIOData {
     poll: amy::Poller,
     reg: amy::Registrar,
-    peers: UHashMap<torrent::PeerConn>,
+    peers: UHashMap<torrent::PeerConnection>,
     events: Vec<cio::Event>,
-    chans: ACChans,
+    chans: AmyControlChannels,
     crashed: bool,
 }
 
-impl ACIO {
-    pub fn new(poll: amy::Poller, reg: amy::Registrar, chans: ACChans) -> ACIO {
-        let data = ACIOData {
+impl AmyControlIO {
+    pub fn new(poll: amy::Poller, reg: amy::Registrar, chans: AmyControlChannels) -> AmyControlIO {
+        let data = AmyControlIOData {
             poll,
             reg,
             chans,
@@ -51,7 +51,7 @@ impl ACIO {
             events: Vec::new(),
             crashed: false,
         };
-        ACIO {
+        AmyControlIO {
             data: Rc::new(RefCell::new(data)),
         }
     }
@@ -117,7 +117,7 @@ impl ACIO {
         &self,
         not: amy::Notification,
         events: &mut Vec<cio::Event>,
-        peers: &mut UHashMap<torrent::PeerConn>,
+        peers: &mut UHashMap<torrent::PeerConnection>,
     ) -> Result<()> {
         if let Some(peer) = peers.get_mut(&not.id) {
             let ev = not.event;
@@ -151,7 +151,7 @@ impl ACIO {
     }
 }
 
-impl cio::CIO for ACIO {
+impl cio::ControlIO for AmyControlIO {
     fn poll(&mut self, events: &mut Vec<cio::Event>) -> Result<()> {
         {
             let mut d = self.data.borrow_mut();
@@ -184,26 +184,26 @@ impl cio::CIO for ACIO {
         d.events.push(event);
     }
 
-    fn add_peer(&mut self, mut peer: torrent::PeerConn) -> Result<cio::PID> {
+    fn add_peer(&mut self, mut peer: torrent::PeerConnection) -> Result<cio::PeerID> {
         if self.data.borrow().peers.len() > CONFIG.net.max_open_sockets {
-            let mut pruned = Vec::new();
+            let mut can_prune = Vec::new();
             for (id, peer) in &self.data.borrow().peers {
-                if peer.last_action().elapsed()
+                if peer.last_action_time().elapsed()
                     > time::Duration::from_secs(CONFIG.peer.prune_timeout)
                 {
-                    pruned.push(*id)
+                    can_prune.push(*id)
                 }
-                if pruned.len() == PRUNE_GOAL {
+                if can_prune.len() == PRUNE_GOAL {
                     break;
                 }
             }
             // We couldn't even prune anything, this client must be really busy...
             // Either way just return an error
-            if pruned.is_empty() {
+            if can_prune.is_empty() {
                 return Err(ErrorKind::Full.into());
             }
 
-            for id in pruned {
+            for id in can_prune {
                 self.remove_peer(id);
             }
         }
@@ -220,23 +220,23 @@ impl cio::CIO for ACIO {
         Ok(id)
     }
 
-    fn get_peer<T, F: FnOnce(&mut torrent::PeerConn) -> T>(
+    fn get_peer<T, F: FnOnce(&mut torrent::PeerConnection) -> T>(
         &mut self,
-        pid: cio::PID,
+        peer_id: cio::PeerID,
         f: F,
     ) -> Option<T> {
-        if let Some(p) = self.data.borrow_mut().peers.get_mut(&pid) {
-            Some(f(p))
+        if let Some(peer_connection) = self.data.borrow_mut().peers.get_mut(&peer_id) {
+            Some(f(peer_connection))
         } else {
             None
         }
     }
 
-    fn remove_peer(&self, peer: cio::PID) {
+    fn remove_peer(&self, peer: cio::PeerID) {
         self.data.borrow_mut().remove_peer(peer);
     }
 
-    fn flush_peers(&mut self, peers: Vec<cio::PID>) {
+    fn flush_peers(&mut self, peers: Vec<cio::PeerID>) {
         let mut events = Vec::new();
         let mut d = self.data.borrow_mut();
 
@@ -257,9 +257,9 @@ impl cio::CIO for ACIO {
         d.events.extend(events.drain(..));
     }
 
-    fn msg_peer(&mut self, pid: cio::PID, msg: torrent::Message) {
+    fn msg_peer(&mut self, peer_id: cio::PeerID, msg: torrent::Message) {
         let mut d = self.data.borrow_mut();
-        let err = if let Some(peer) = d.peers.get_mut(&pid) {
+        let err = if let Some(peer) = d.peers.get_mut(&peer_id) {
             peer.write_message(msg).chain_err(|| ErrorKind::IO).err()
         } else {
             // might happen if removed but still present in a torrent
@@ -267,9 +267,9 @@ impl cio::CIO for ACIO {
             None
         };
         if let Some(e) = err {
-            d.remove_peer(pid);
+            d.remove_peer(peer_id);
             d.events.push(cio::Event::Peer {
-                peer: pid,
+                peer: peer_id,
                 event: Err(e),
             });
         }
@@ -320,20 +320,20 @@ impl cio::CIO for ACIO {
     }
 
     fn new_handle(&self) -> Self {
-        ACIO {
+        AmyControlIO {
             data: self.data.clone(),
         }
     }
 }
 
-impl ACIOData {
-    fn remove_peer(&mut self, pid: cio::PID) {
-        if let Some(p) = self.peers.remove(&pid) {
+impl AmyControlIOData {
+    fn remove_peer(&mut self, peer_id: cio::PeerID) {
+        if let Some(p) = self.peers.remove(&peer_id) {
             if let Err(e) = self.reg.deregister(p.sock()) {
                 error!("Failed to deregister sock: {:?}", e);
             }
             self.events.push(cio::Event::Peer {
-                peer: pid,
+                peer: peer_id,
                 event: Err(ErrorKind::Request.into()),
             });
         }

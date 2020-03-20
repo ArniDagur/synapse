@@ -6,13 +6,13 @@ use control::cio;
 use torrent::Torrent;
 use util::UHashMap;
 
-pub trait Job<T: cio::CIO> {
+pub trait Job<T: cio::ControlIO> {
     fn update(&mut self, torrents: &mut UHashMap<Torrent<T>>);
 }
 
 pub struct TrackerUpdate;
 
-impl<T: cio::CIO> Job<T> for TrackerUpdate {
+impl<T: cio::ControlIO> Job<T> for TrackerUpdate {
     fn update(&mut self, torrents: &mut UHashMap<Torrent<T>>) {
         for (_, torrent) in torrents.iter_mut() {
             torrent.try_update_tracker();
@@ -22,7 +22,7 @@ impl<T: cio::CIO> Job<T> for TrackerUpdate {
 
 pub struct UnchokeUpdate;
 
-impl<T: cio::CIO> Job<T> for UnchokeUpdate {
+impl<T: cio::ControlIO> Job<T> for UnchokeUpdate {
     fn update(&mut self, torrents: &mut UHashMap<Torrent<T>>) {
         for (_, torrent) in torrents.iter_mut() {
             torrent.update_unchoked();
@@ -32,7 +32,7 @@ impl<T: cio::CIO> Job<T> for UnchokeUpdate {
 
 pub struct SessionUpdate;
 
-impl<T: cio::CIO> Job<T> for SessionUpdate {
+impl<T: cio::ControlIO> Job<T> for SessionUpdate {
     fn update(&mut self, torrents: &mut UHashMap<Torrent<T>>) {
         for (_, torrent) in torrents.iter_mut() {
             if torrent.dirty() {
@@ -56,7 +56,7 @@ impl TorrentTxUpdate {
     }
 }
 
-impl<T: cio::CIO> Job<T> for TorrentTxUpdate {
+impl<T: cio::ControlIO> Job<T> for TorrentTxUpdate {
     fn update(&mut self, torrents: &mut UHashMap<Torrent<T>>) {
         for (id, torrent) in torrents.iter_mut() {
             let active = torrent.tick();
@@ -98,7 +98,7 @@ impl PEXUpdate {
     }
 }
 
-impl<T: cio::CIO> Job<T> for PEXUpdate {
+impl<T: cio::ControlIO> Job<T> for PEXUpdate {
     fn update(&mut self, torrents: &mut UHashMap<Torrent<T>>) {
         for (id, torrent) in torrents.iter_mut().filter(|&(_, ref t)| !t.info().private) {
             if !self.peers.contains_key(id) {

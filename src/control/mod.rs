@@ -35,7 +35,7 @@ const ENQUEUE_JOB_SECS: u64 = 5;
 /// Interval to requery all jobs and execute if needed
 const JOB_INT_MS: usize = 500;
 
-pub struct Control<T: cio::CIO> {
+pub struct Control<T: cio::ControlIO> {
     throttler: Throttler,
     cio: T,
     tid_cnt: usize,
@@ -70,11 +70,11 @@ struct Queue {
     inactive_dl: [FHashSet<usize>; 6],
 }
 
-pub trait CJob<T: cio::CIO> {
+pub trait CJob<T: cio::ControlIO> {
     fn update(&mut self, control: &mut Control<T>);
 }
 
-struct JobManager<T: cio::CIO> {
+struct JobManager<T: cio::ControlIO> {
     jobs: Vec<JobData<Box<dyn job::Job<T>>>>,
     cjobs: Vec<JobData<Box<dyn CJob<T>>>>,
 }
@@ -85,7 +85,7 @@ struct JobData<T> {
     interval: time::Duration,
 }
 
-impl<T: cio::CIO> Control<T> {
+impl<T: cio::ControlIO> Control<T> {
     pub fn new(
         mut cio: T,
         throttler: Throttler,
@@ -222,7 +222,7 @@ impl<T: cio::CIO> Control<T> {
             trace!("Succesfully parsed torrent file {:?}", dir.path());
             self.hash_idx.insert(t.info().hash, tid);
             self.tid_cnt += 1;
-            if t.status().leeching() {
+            if t.status().is_leeching() {
                 self.queue.add(tid, t.priority());
             }
             self.torrents.insert(tid, t);
@@ -309,7 +309,7 @@ impl<T: cio::CIO> Control<T> {
         };
         for ip in &peers {
             trace!("Adding peer({:?})!", ip);
-            if let Ok(peer) = peer::PeerConn::new_outgoing(ip) {
+            if let Ok(peer) = peer::PeerConnection::new_outgoing(ip) {
                 trace!("Added peer({:?})!", ip);
                 self.add_peer(id, peer);
             }
@@ -340,7 +340,7 @@ impl<T: cio::CIO> Control<T> {
         if let Some(tid) = self.hash_idx.get(&msg.hash).cloned() {
             let id = msg.id;
             let rsv = msg.rsv;
-            match peer::PeerConn::new_incoming(msg.conn, msg.reader) {
+            match peer::PeerConnection::new_incoming(msg.conn, msg.reader) {
                 Ok(p) => self.add_inc_peer(tid, p, id, rsv),
                 Err(e) => {
                     error!("Failed to create peer connection: {:?}", e);
@@ -352,7 +352,7 @@ impl<T: cio::CIO> Control<T> {
         }
     }
 
-    fn handle_peer_ev(&mut self, peer: cio::PID, ev: cio::Result<torrent::Message>) {
+    fn handle_peer_ev(&mut self, peer: cio::PeerID, ev: cio::Result<torrent::Message>) {
         let p = &mut self.peers;
         let t = &mut self.torrents;
 
@@ -372,7 +372,7 @@ impl<T: cio::CIO> Control<T> {
 
     fn add_torrent(
         &mut self,
-        info: torrent::Info,
+        info: torrent::TorrentInfo,
         path: Option<String>,
         start: bool,
         import: bool,
@@ -456,7 +456,7 @@ impl<T: cio::CIO> Control<T> {
                 let res = id_to_hash(&id)
                     .and_then(|d| self.hash_idx.get(d.as_ref()))
                     .cloned();
-                let pres = peer::PeerConn::new_outgoing(&peer);
+                let pres = peer::PeerConnection::new_outgoing(&peer);
                 if let Some(tid) = res {
                     if let Ok(pc) = pres {
                         if let Some(id) = self.add_peer_rpc(tid, pc) {
@@ -512,8 +512,8 @@ impl<T: cio::CIO> Control<T> {
                 throttle_up,
                 throttle_down,
             } => {
-                let tu = throttle_up.unwrap_or_else(|| self.throttler.ul_rate());
-                let td = throttle_down.unwrap_or_else(|| self.throttler.dl_rate());
+                let tu = throttle_up.unwrap_or_else(|| self.throttler.upload_rate());
+                let td = throttle_down.unwrap_or_else(|| self.throttler.download_rate());
                 self.throttler.set_ul_rate(tu);
                 self.throttler.set_dl_rate(td);
                 self.data.throttle_ul = tu;
@@ -645,39 +645,39 @@ impl<T: cio::CIO> Control<T> {
         false
     }
 
-    fn add_peer_rpc(&mut self, id: usize, peer: peer::PeerConn) -> Option<String> {
+    fn add_peer_rpc(&mut self, id: usize, peer: peer::PeerConnection) -> Option<String> {
         trace!("Adding peer to torrent {:?}!", id);
         if let Some(torrent) = self.torrents.get_mut(&id) {
-            if let Some(pid) = torrent.add_peer(peer) {
-                self.peers.insert(pid, id);
-                return Some(util::peer_rpc_id(&torrent.info().hash, pid as u64));
+            if let Some(peer_id) = torrent.add_peer(peer) {
+                self.peers.insert(peer_id, id);
+                return Some(util::peer_rpc_id(&torrent.info().hash, peer_id as u64));
             }
         }
         None
     }
 
-    fn add_peer(&mut self, id: usize, peer: peer::PeerConn) {
+    fn add_peer(&mut self, id: usize, peer: peer::PeerConnection) {
         trace!("Adding peer to torrent {:?}!", id);
         if let Some(torrent) = self.torrents.get_mut(&id) {
-            if !self.queue.active_dl.contains(&id) && !torrent.status().completed() {
+            if !self.queue.active_dl.contains(&id) && !torrent.status().is_completed() {
                 self.queue.add(id, torrent.priority());
                 return;
             }
-            if let Some(pid) = torrent.add_peer(peer) {
-                self.peers.insert(pid, id);
+            if let Some(peer_id) = torrent.add_peer(peer) {
+                self.peers.insert(peer_id, id);
             }
         }
     }
 
-    fn add_inc_peer(&mut self, id: usize, peer: peer::PeerConn, cid: [u8; 20], rsv: [u8; 8]) {
+    fn add_inc_peer(&mut self, id: usize, peer: peer::PeerConnection, cid: [u8; 20], rsv: [u8; 8]) {
         trace!("Adding peer to torrent {:?}!", id);
         if let Some(torrent) = self.torrents.get_mut(&id) {
-            if !self.queue.active_dl.contains(&id) && !torrent.status().completed() {
+            if !self.queue.active_dl.contains(&id) && !torrent.status().is_completed() {
                 self.queue.add(id, torrent.priority());
                 return;
             }
-            if let Some(pid) = torrent.add_inc_peer(peer, cid, rsv) {
-                self.peers.insert(pid, id);
+            if let Some(peer_id) = torrent.add_inc_peer(peer, cid, rsv) {
+                self.peers.insert(peer_id, id);
             }
         }
     }
@@ -695,7 +695,7 @@ impl<T: cio::CIO> Control<T> {
     fn update_rpc_tx(&mut self) {
         self.stat.tick();
         if self.stat.active() {
-            let (ul, dl) = (self.stat.avg_ul(), self.stat.avg_dl());
+            let (ul, dl) = (self.stat.avg_upload(), self.stat.avg_download());
             self.cio.msg_rpc(rpc::CtlMessage::Update(vec![
                 rpc::resource::SResourceUpdate::ServerTransfer {
                     id: self.data.id.clone(),
@@ -716,8 +716,8 @@ impl<T: cio::CIO> Control<T> {
             id: self.data.id.clone(),
             rate_up: 0,
             rate_down: 0,
-            throttle_up: self.throttler.ul_rate(),
-            throttle_down: self.throttler.dl_rate(),
+            throttle_up: self.throttler.upload_rate(),
+            throttle_down: self.throttler.download_rate(),
             transferred_up: self.data.ul,
             transferred_down: self.data.dl,
             ses_transferred_up: self.data.session_ul,
@@ -731,7 +731,7 @@ impl<T: cio::CIO> Control<T> {
     }
 }
 
-impl<T: cio::CIO> Drop for Control<T> {
+impl<T: cio::ControlIO> Drop for Control<T> {
     fn drop(&mut self) {
         debug!("Triggering thread shutdown sequence!");
         self.torrents.drain().last();
@@ -808,7 +808,7 @@ impl Queue {
     }
 }
 
-impl<T: cio::CIO> JobManager<T> {
+impl<T: cio::ControlIO> JobManager<T> {
     pub fn new() -> JobManager<T> {
         JobManager {
             jobs: Vec::with_capacity(0),
@@ -850,7 +850,7 @@ impl<T: cio::CIO> JobManager<T> {
 
 pub struct SpaceUpdate;
 
-impl<T: cio::CIO> CJob<T> for SpaceUpdate {
+impl<T: cio::ControlIO> CJob<T> for SpaceUpdate {
     fn update(&mut self, control: &mut Control<T>) {
         control.cio.msg_disk(disk::Request::FreeSpace);
     }
@@ -858,7 +858,7 @@ impl<T: cio::CIO> CJob<T> for SpaceUpdate {
 
 pub struct EnqueueUpdate;
 
-impl<T: cio::CIO> CJob<T> for EnqueueUpdate {
+impl<T: cio::ControlIO> CJob<T> for EnqueueUpdate {
     fn update(&mut self, control: &mut Control<T>) {
         let queue = &mut control.queue;
         let torrents = &mut control.torrents;
@@ -876,7 +876,7 @@ impl<T: cio::CIO> CJob<T> for EnqueueUpdate {
 
 pub struct SerializeUpdate;
 
-impl<T: cio::CIO> CJob<T> for SerializeUpdate {
+impl<T: cio::ControlIO> CJob<T> for SerializeUpdate {
     fn update(&mut self, control: &mut Control<T>) {
         control.serialize();
     }

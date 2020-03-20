@@ -25,7 +25,7 @@ impl Choker {
         }
     }
 
-    pub fn add_peer<T: cio::CIO>(&mut self, peer: &mut Peer<T>) {
+    pub fn add_peer<T: cio::ControlIO>(&mut self, peer: &mut Peer<T>) {
         if self.unchoked.len() < 5 {
             self.unchoked.push(peer.id());
             peer.flush();
@@ -35,7 +35,7 @@ impl Choker {
         }
     }
 
-    fn unchoke_random<T: cio::CIO>(&mut self, peers: &mut UHashMap<Peer<T>>) -> Option<usize> {
+    fn unchoke_random<T: cio::ControlIO>(&mut self, peers: &mut UHashMap<Peer<T>>) -> Option<usize> {
         if let Some(random_id) = random_sample(self.interested.iter()).cloned() {
             peers.get_mut(&random_id).map(|mut peer| {
                 self.interested.remove(&random_id);
@@ -47,7 +47,7 @@ impl Choker {
         }
     }
 
-    pub fn remove_peer<T: cio::CIO>(
+    pub fn remove_peer<T: cio::ControlIO>(
         &mut self,
         peer: &mut Peer<T>,
         peers: &mut UHashMap<Peer<T>>,
@@ -77,7 +77,7 @@ impl Choker {
         }
     }
 
-    pub fn update_upload<T: cio::CIO>(&mut self, peers: &mut UHashMap<Peer<T>>) -> Option<SwapRes> {
+    pub fn update_upload<T: cio::ControlIO>(&mut self, peers: &mut UHashMap<Peer<T>>) -> Option<SwapRes> {
         if self.update_timer().is_err() {
             return None;
         }
@@ -94,7 +94,7 @@ impl Choker {
         self.swap_peer(slowest, peers)
     }
 
-    pub fn update_download<T: cio::CIO>(
+    pub fn update_download<T: cio::ControlIO>(
         &mut self,
         peers: &mut UHashMap<Peer<T>>,
     ) -> Option<SwapRes> {
@@ -112,7 +112,7 @@ impl Choker {
         self.swap_peer(slowest, peers)
     }
 
-    fn swap_peer<T: cio::CIO>(
+    fn swap_peer<T: cio::ControlIO>(
         &mut self,
         idx: usize,
         peers: &mut UHashMap<Peer<T>>,
