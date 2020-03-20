@@ -46,10 +46,8 @@ pub enum Error {
 
 impl Resolver {
     pub fn new(servers: &[SocketAddr]) -> Resolver {
-        let mut buf = Vec::with_capacity(512);
-        unsafe {
-            buf.set_len(512);
-        }
+        let buf = vec![0; 512];
+
         Resolver {
             servers: servers.to_owned(),
             queries: HashMap::new(),
@@ -66,10 +64,7 @@ impl Resolver {
     }
 
     pub fn from_resolv() -> io::Result<Resolver> {
-        let mut buf = Vec::with_capacity(512);
-        unsafe {
-            buf.set_len(512);
-        }
+        let buf = vec![0; 512];
 
         let mut conf = Vec::with_capacity(4096);
         let mut f = File::open("/etc/resolv.conf")?;

@@ -257,10 +257,7 @@ impl Reader {
                         let id = self.prefix[5];
                         self.idx = 0;
                         let plen = BigEndian::read_u32(&self.prefix[0..4]) - 2;
-                        let mut payload = Vec::with_capacity(plen as usize);
-                        unsafe {
-                            payload.set_len(plen as usize);
-                        }
+                        let payload = vec![0; plen as usize];
                         self.state = State::Extension { id, payload };
                     }
                     IOR::Blocked => return RRes::Blocked,
