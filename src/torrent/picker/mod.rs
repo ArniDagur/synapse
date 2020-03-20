@@ -46,8 +46,8 @@ pub struct Block {
 /// and can be told when a piece is complete(or invalid).
 #[derive(Clone, Debug)]
 enum PickerKind {
-    Rarest(rarest::Picker),
-    Sequential(sequential::Picker),
+    Rarest(rarest::RarestPicker),
+    Sequential(sequential::SequentialPicker),
 }
 
 /// A downloading block and the peers it has been
@@ -80,7 +80,7 @@ impl Picker {
     /// will default to rarest first.
     pub fn new(info: &Arc<TorrentInfo>, pieces: &Bitfield, priorities: &[u8]) -> Picker {
         let scale = info.piece_len / 16_384;
-        let picker = rarest::Picker::new(pieces);
+        let picker = rarest::RarestPicker::new(pieces);
         let last_piece = info.pieces().saturating_sub(1);
         let lpl = info.piece_len(last_piece);
         let last_piece_scale = if lpl % 16_384 == 0 {
@@ -300,9 +300,9 @@ impl Picker {
     /// after this.
     pub fn change_picker(&mut self, sequential: bool) {
         self.picker = if sequential {
-            PickerKind::Sequential(sequential::Picker::new(&self.unpicked))
+            PickerKind::Sequential(sequential::SequentialPicker::new(&self.unpicked))
         } else {
-            PickerKind::Rarest(rarest::Picker::new(&self.unpicked))
+            PickerKind::Rarest(rarest::RarestPicker::new(&self.unpicked))
         };
     }
 
@@ -314,7 +314,7 @@ impl Picker {
 
     pub fn apply_priorities(&mut self) {
         if self.is_sequential() {
-            self.picker = PickerKind::Sequential(sequential::Picker::with_pri(
+            self.picker = PickerKind::Sequential(sequential::SequentialPicker::with_priority(
                 &self.unpicked,
                 &self.priorities,
             ));

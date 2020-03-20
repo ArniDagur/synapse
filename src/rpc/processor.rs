@@ -38,7 +38,7 @@ pub struct Processor {
     // Index by torrent ID
     torrent_idx: SHashMap<MHashSet<String>>,
     tokens: SHashMap<BearerToken>,
-    db: amy::Sender<disk::Request>,
+    db: amy::Sender<disk::DiskRequest>,
     user_data: SHashMap<json::Value>,
 }
 
@@ -71,7 +71,7 @@ pub enum TransferKind {
 const EXPIRATION_DUR: i64 = 120;
 
 impl Processor {
-    pub fn new(db: amy::Sender<disk::Request>) -> Processor {
+    pub fn new(db: amy::Sender<disk::DiskRequest>) -> Processor {
         let p = Path::new(&CONFIG.disk.session[..]).join(USER_DATA_FILE);
         let mut data = Vec::new();
 
@@ -750,7 +750,9 @@ impl Processor {
         if let Ok(data) = bincode::serialize(&json_data) {
             let path = Path::new(&CONFIG.disk.session[..]).join(USER_DATA_FILE);
 
-            self.db.send(disk::Request::WriteFile { data, path }).ok();
+            self.db
+                .send(disk::DiskRequest::WriteFile { data, path })
+                .ok();
         }
     }
 }

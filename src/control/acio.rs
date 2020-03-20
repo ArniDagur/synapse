@@ -19,8 +19,8 @@ pub struct AmyControlIO {
 }
 
 pub struct AmyControlChannels {
-    pub disk_tx: amy::Sender<disk::Request>,
-    pub disk_rx: amy::Receiver<disk::Response>,
+    pub disk_tx: amy::Sender<disk::DiskRequest>,
+    pub disk_rx: amy::Receiver<disk::DiskResponse>,
 
     pub rpc_tx: amy::Sender<rpc::CtlMessage>,
     pub rpc_rx: amy::Receiver<rpc::Message>,
@@ -90,7 +90,7 @@ impl AmyControlIO {
             events.push(cio::Event::Timer(id));
 
             // Liveness checks
-            match d.chans.disk_tx.send(disk::Request::Ping) {
+            match d.chans.disk_tx.send(disk::DiskRequest::Ping) {
                 Ok(_) => {}
                 Err(ChannelError::SendError(_)) => d.crashed = true,
                 Err(e) => error!("Unknown error sending to channel: {:?}", e),
@@ -293,7 +293,7 @@ impl cio::ControlIO for AmyControlIO {
         }
     }
 
-    fn msg_disk(&mut self, msg: disk::Request) {
+    fn msg_disk(&mut self, msg: disk::DiskRequest) {
         let mut d = self.data.borrow_mut();
 
         if d.chans.disk_tx.send(msg).is_err() && !d.crashed {

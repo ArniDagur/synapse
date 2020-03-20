@@ -6,7 +6,7 @@ use control::cio;
 use torrent::{Bitfield, Peer};
 
 #[derive(Clone, Debug)]
-pub struct Picker {
+pub struct RarestPicker {
     /// Current order of pieces
     pieces: Vec<u32>,
     /// Indices into pieces which indicate priority bounds
@@ -30,8 +30,8 @@ struct PieceInfo {
 
 const PIECE_COMPLETE_DEC: usize = 100;
 
-impl Picker {
-    pub fn new(pieces: &Bitfield) -> Picker {
+impl RarestPicker {
+    pub fn new(pieces: &Bitfield) -> RarestPicker {
         let mut piece_idx = Vec::new();
         for i in 0..pieces.len() {
             piece_idx.push(PieceInfo {
@@ -40,7 +40,7 @@ impl Picker {
                 status: PieceStatus::Incomplete,
             });
         }
-        let mut p = Picker {
+        let mut p = RarestPicker {
             pieces: (0..pieces.len() as u32).collect(),
             piece_idx,
             priorities: vec![pieces.len() as usize],
@@ -74,11 +74,11 @@ impl Picker {
     }
 
     pub fn piece_available(&mut self, piece: u32) {
-        self.dec_pri(piece);
-        self.dec_pri(piece);
+        self.dec_priority(piece);
+        self.dec_priority(piece);
     }
 
-    pub fn dec_pri(&mut self, piece: u32) {
+    pub fn dec_priority(&mut self, piece: u32) {
         let (idx, avail) = {
             let piece = self.piece_idx.index_mut(piece as usize);
             self.priorities[piece.availability] -= 1;
@@ -94,11 +94,11 @@ impl Picker {
     }
 
     pub fn piece_unavailable(&mut self, piece: u32) {
-        self.inc_pri(piece);
-        self.inc_pri(piece);
+        self.inc_priority(piece);
+        self.inc_priority(piece);
     }
 
-    pub fn inc_pri(&mut self, piece: u32) {
+    pub fn inc_priority(&mut self, piece: u32) {
         let (idx, avail) = {
             let piece = self.piece_idx.index_mut(piece as usize);
             piece.availability -= 1;
@@ -137,7 +137,7 @@ impl Picker {
         let piece = peer.piece_cache().last();
         if let Some(p) = piece {
             if (self.piece_idx[*p as usize].availability % 2) == 0 {
-                self.inc_pri(*p);
+                self.inc_priority(*p);
             }
         }
         piece.cloned()
@@ -147,7 +147,7 @@ impl Picker {
         if self.piece_idx[piece as usize].status != PieceStatus::Incomplete {
             self.piece_idx[piece as usize].status = PieceStatus::Incomplete;
             for _ in 0..PIECE_COMPLETE_DEC {
-                self.inc_pri(piece);
+                self.inc_priority(piece);
             }
         }
     }
@@ -158,7 +158,7 @@ impl Picker {
             // As hacky as this is, it's a good way to ensure that
             // we never waste time picking already selected pieces
             for _ in 0..PIECE_COMPLETE_DEC {
-                self.dec_pri(piece);
+                self.dec_priority(piece);
             }
         }
     }
@@ -172,13 +172,13 @@ impl Picker {
 
 #[cfg(test)]
 mod tests {
-    use super::Picker;
+    use super::RarestPicker;
     use torrent::{Bitfield, Peer};
 
     #[test]
     fn test_available() {
         let b = Bitfield::new(3);
-        let mut picker = Picker::new(&b);
+        let mut picker = RarestPicker::new(&b);
         let mut peers = vec![
             Peer::test_from_pieces(0, b.clone()),
             Peer::test_from_pieces(0, b.clone()),
@@ -208,7 +208,7 @@ mod tests {
     fn test_unavailable() {
         let b = Bitfield::new(3);
 
-        let mut picker = Picker::new(&b);
+        let mut picker = RarestPicker::new(&b);
         let mut peers = vec![
             Peer::test_from_pieces(0, b.clone()),
             Peer::test_from_pieces(0, b.clone()),

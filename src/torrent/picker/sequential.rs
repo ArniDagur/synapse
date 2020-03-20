@@ -2,7 +2,7 @@ use control::cio;
 use torrent::{Bitfield, Peer};
 
 #[derive(Clone, Debug)]
-pub struct Picker {
+pub struct SequentialPicker {
     /// The max block index that we've picked up to so far
     piece_idx: usize,
     pieces: Vec<Piece>,
@@ -20,8 +20,8 @@ enum PieceStatus {
     Complete,
 }
 
-impl Picker {
-    pub fn new(bf: &Bitfield) -> Picker {
+impl SequentialPicker {
+    pub fn new(bf: &Bitfield) -> SequentialPicker {
         let mut pieces = [vec![], vec![], vec![], vec![], vec![], vec![]];
         for i in 0..bf.len() {
             if bf.has_bit(i) {
@@ -30,10 +30,10 @@ impl Picker {
                 pieces[3].push(i as u32);
             }
         }
-        Picker::build(pieces)
+        SequentialPicker::build(pieces)
     }
 
-    pub fn with_pri(bf: &Bitfield, pri: &[u8]) -> Picker {
+    pub fn with_priority(bf: &Bitfield, pri: &[u8]) -> SequentialPicker {
         let mut pieces = [vec![], vec![], vec![], vec![], vec![], vec![]];
         for (piece, pri) in pri.iter().enumerate() {
             if bf.has_bit(piece as u64) {
@@ -42,10 +42,10 @@ impl Picker {
                 pieces[*pri as usize].push(piece as u32);
             }
         }
-        Picker::build(pieces)
+        SequentialPicker::build(pieces)
     }
 
-    fn build(pieces: [Vec<u32>; 6]) -> Picker {
+    fn build(pieces: [Vec<u32>; 6]) -> SequentialPicker {
         let mut p = vec![];
         for i in &pieces[0] {
             p.push(Piece {
@@ -63,7 +63,7 @@ impl Picker {
                 })
             }
         }
-        Picker {
+        SequentialPicker {
             piece_idx: il,
             pieces: p,
         }
@@ -111,13 +111,13 @@ impl Picker {
 
 #[cfg(test)]
 mod tests {
-    use super::Picker;
+    use super::SequentialPicker;
     use torrent::{Bitfield, Peer};
 
     #[test]
     fn test_piece_pick_order() {
         let b = Bitfield::new(3);
-        let mut picker = Picker::new(&b);
+        let mut picker = SequentialPicker::new(&b);
         let mut peer = Peer::test_from_pieces(0, b);
         assert_eq!(picker.pick(&peer), None);
         peer.pieces_mut().set_bit(1);

@@ -179,13 +179,13 @@ pub struct RPC {
     transfers: Transfers,
     clients: UHashMap<Client>,
     incoming: UHashMap<Incoming>,
-    disk: amy::Sender<disk::Request>,
+    disk: amy::Sender<disk::DiskRequest>,
 }
 
 impl RPC {
     pub fn start(
         creg: &mut amy::Registrar,
-        db: amy::Sender<disk::Request>,
+        db: amy::Sender<disk::DiskRequest>,
     ) -> io::Result<(handle::Handle<Message, CtlMessage>, thread::JoinHandle<()>)> {
         let poll = amy::Poller::new()?;
         let mut reg = poll.get_registrar();
@@ -472,7 +472,7 @@ impl RPC {
                         };
                         debug!("Initiating DL");
                         self.disk
-                            .send(disk::Request::download(conn, path, r, ranged, size))
+                            .send(disk::DiskRequest::download(conn, path, r, ranged, size))
                             .ok();
                     } else {
                         debug!("ID {} invalid, stopping DL", id);

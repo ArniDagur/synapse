@@ -21,7 +21,7 @@ static MP_BOUNDARY: &str = "qxyllcqgNchqyob";
 
 pub struct Location {
     /// Info file index
-    pub file: usize,
+    pub file_index: usize,
     pub file_len: u64,
     /// Offset into file
     pub offset: u64,
@@ -30,11 +30,11 @@ pub struct Location {
     /// end in the piece
     pub end: usize,
     /// This file should be fully allocated if possible
-    pub allocate: bool,
-    info: Arc<TorrentInfo>,
+    pub should_allocate: bool,
+    torrent_info: Arc<TorrentInfo>,
 }
 
-pub enum Request {
+pub enum DiskRequest {
     Write {
         tid: usize,
         data: Buffer,
@@ -44,7 +44,7 @@ pub enum Request {
     Read {
         data: Buffer,
         locations: LocIter,
-        context: Ctx,
+        context: Context,
         path: Option<String>,
     },
     Serialize {
@@ -100,8 +100,8 @@ pub enum Request {
     Shutdown,
 }
 
-pub enum Response {
-    Read { context: Ctx, data: Arc<Buffer> },
+pub enum DiskResponse {
+    Read { context: Context, data: Arc<Buffer> },
     ValidationComplete { tid: usize, invalid: Vec<u32> },
     PieceValidated { tid: usize, piece: u32, valid: bool },
     ValidationUpdate { tid: usize, percent: f32 },
@@ -110,7 +110,7 @@ pub enum Response {
     Error { tid: usize, err: io::Error },
 }
 
-pub struct Ctx {
+pub struct Context {
     pub peer_id: usize,
     pub tid: usize,
     pub idx: u32,
@@ -118,17 +118,22 @@ pub struct Ctx {
     pub length: u32,
 }
 
-pub enum JobRes {
-    Resp(Response),
-    Update(Request, Response),
+pub enum DiskJobResult {
+    Resp(DiskResponse),
+    Update(DiskRequest, DiskResponse),
     Done,
-    Paused(Request),
-    Blocked((usize, Request)),
+    Paused(DiskRequest),
+    Blocked((usize, DiskRequest)),
 }
 
-impl Request {
-    pub fn write(tid: usize, data: Buffer, locations: LocIter, path: Option<String>) -> Request {
-        Request::Write {
+impl DiskRequest {
+    pub fn write(
+        tid: usize,
+        data: Buffer,
+        locations: LocIter,
+        path: Option<String>,
+    ) -> DiskRequest {
+        DiskRequest::Write {
             tid,
             data,
             locations,
@@ -136,8 +141,13 @@ impl Request {
         }
     }
 
-    pub fn read(context: Ctx, data: Buffer, locations: LocIter, path: Option<String>) -> Request {
-        Request::Read {
+    pub fn read(
+        context: Context,
+        data: Buffer,
+        locations: LocIter,
+        path: Option<String>,
+    ) -> DiskRequest {
+        DiskRequest::Read {
             context,
             data,
             locations,
@@ -145,12 +155,12 @@ impl Request {
         }
     }
 
-    pub fn serialize(tid: usize, data: Vec<u8>, hash: [u8; 20]) -> Request {
-        Request::Serialize { tid, data, hash }
+    pub fn serialize(tid: usize, data: Vec<u8>, hash: [u8; 20]) -> DiskRequest {
+        DiskRequest::Serialize { tid, data, hash }
     }
 
-    pub fn validate(tid: usize, info: Arc<TorrentInfo>, path: Option<String>) -> Request {
-        Request::Validate {
+    pub fn validate(tid: usize, info: Arc<TorrentInfo>, path: Option<String>) -> DiskRequest {
+        DiskRequest::Validate {
             tid,
             info,
             path,
@@ -164,8 +174,8 @@ impl Request {
         info: Arc<TorrentInfo>,
         path: Option<String>,
         piece: u32,
-    ) -> Request {
-        Request::ValidatePiece {
+    ) -> DiskRequest {
+        DiskRequest::ValidatePiece {
             tid,
             info,
             path,
@@ -179,8 +189,8 @@ impl Request {
         files: Vec<PathBuf>,
         path: Option<String>,
         artifacts: bool,
-    ) -> Request {
-        Request::Delete {
+    ) -> DiskRequest {
+        DiskRequest::Delete {
             tid,
             hash,
             files,
@@ -195,7 +205,7 @@ impl Request {
         mut ranges: Vec<HttpRange>,
         mut ranged: bool,
         len: u64,
-    ) -> Request {
+    ) -> DiskRequest {
         let lines = if ranged {
             if ranges.len() == 1 {
                 ranged = false;
@@ -255,7 +265,7 @@ impl Request {
                 },
             );
         }
-        Request::Download {
+        DiskRequest::Download {
             client,
             path,
             ranges,
@@ -270,32 +280,32 @@ impl Request {
         }
     }
 
-    pub fn shutdown() -> Request {
-        Request::Shutdown
+    pub fn shutdown() -> DiskRequest {
+        DiskRequest::Shutdown
     }
 
     pub fn concurrent(&self) -> bool {
         match self {
-            Request::Validate { .. } => false,
+            DiskRequest::Validate { .. } => false,
             _ => true,
         }
     }
 
-    pub fn execute(self, fc: &mut FileCache, bc: &mut BufCache) -> io::Result<JobRes> {
+    pub fn execute(self, fc: &mut FileCache, bc: &mut BufCache) -> io::Result<DiskJobResult> {
         let sd = &CONFIG.disk.session;
         let dd = &CONFIG.disk.directory;
         let (mut tb, mut tpb, mut tpb2) = bc.data();
         match self {
-            Request::Ping => {}
-            Request::FreeSpace => {
+            DiskRequest::Ping => {}
+            DiskRequest::FreeSpace => {
                 if let Ok(stat) = statvfs::statvfs(dd.as_str()) {
                     let space = stat.fragment_size() as u64 * stat.blocks_available() as u64;
-                    return Ok(JobRes::Resp(Response::FreeSpace(space)));
+                    return Ok(DiskJobResult::Resp(DiskResponse::FreeSpace(space)));
                 } else {
                     return io_err("couldn't stat fs");
                 }
             }
-            Request::WriteFile { path, data } => {
+            DiskRequest::WriteFile { path, data } => {
                 let p = tpb.get(path.iter());
                 p.set_extension("temp");
                 let res = fs::OpenOptions::new()
@@ -316,7 +326,7 @@ impl Request {
                     }
                 }
             }
-            Request::Write {
+            DiskRequest::Write {
                 data,
                 locations,
                 path,
@@ -340,7 +350,7 @@ impl Request {
                     }
                 }
             }
-            Request::Read {
+            DiskRequest::Read {
                 context,
                 mut data,
                 locations,
@@ -353,9 +363,9 @@ impl Request {
                     fc.read_file_range(&pb, loc.offset, &mut data[loc.start..loc.end])?;
                 }
                 let data = Arc::new(data);
-                return Ok(JobRes::Resp(Response::read(context, data)));
+                return Ok(DiskJobResult::Resp(DiskResponse::read(context, data)));
             }
-            Request::Move {
+            DiskRequest::Move {
                 tid,
                 from,
                 to,
@@ -385,9 +395,9 @@ impl Request {
                         return Err(e);
                     }
                 }
-                return Ok(JobRes::Resp(Response::moved(tid, to)));
+                return Ok(DiskJobResult::Resp(DiskResponse::moved(tid, to)));
             }
-            Request::Serialize { data, hash, .. } => {
+            DiskRequest::Serialize { data, hash, .. } => {
                 let temp = tpb.get(sd);
                 temp.push(hash_to_id(&hash) + ".temp");
                 let mut f = fs::OpenOptions::new()
@@ -399,7 +409,7 @@ impl Request {
                 actual.push(hash_to_id(&hash));
                 fs::rename(temp, actual)?;
             }
-            Request::Delete {
+            DiskRequest::Delete {
                 hash,
                 files,
                 path,
@@ -433,7 +443,7 @@ impl Request {
                     fs::remove_dir(&pb).ok();
                 }
             }
-            Request::ValidatePiece {
+            DiskRequest::ValidatePiece {
                 tid,
                 info,
                 path,
@@ -450,13 +460,13 @@ impl Request {
                         .ok();
                 }
                 let digest = ctx.finish();
-                return Ok(JobRes::Resp(Response::PieceValidated {
+                return Ok(DiskJobResult::Resp(DiskResponse::PieceValidated {
                     tid,
                     piece,
                     valid: digest[..] == info.hashes[piece as usize][..],
                 }));
             }
-            Request::Validate {
+            DiskRequest::Validate {
                 tid,
                 info,
                 path,
@@ -491,25 +501,27 @@ impl Request {
                     idx += 1;
                 }
                 if idx == info.pieces() {
-                    return Ok(JobRes::Resp(Response::validation_complete(tid, invalid)));
+                    return Ok(DiskJobResult::Resp(DiskResponse::validation_complete(
+                        tid, invalid,
+                    )));
                 } else {
                     let pieces = info.pieces();
-                    return Ok(JobRes::Update(
-                        Request::Validate {
+                    return Ok(DiskJobResult::Update(
+                        DiskRequest::Validate {
                             tid,
                             info,
                             path,
                             idx,
                             invalid,
                         },
-                        Response::ValidationUpdate {
+                        DiskResponse::ValidationUpdate {
                             tid,
                             percent: idx as f32 / pieces as f32,
                         },
                     ));
                 }
             }
-            Request::Download {
+            DiskRequest::Download {
                 mut client,
                 path,
                 id,
@@ -535,9 +547,9 @@ impl Request {
                                 }
                                 IOR::Incomplete(w) => buf_idx += w,
                                 IOR::Blocked => {
-                                    return Ok(JobRes::Blocked((
+                                    return Ok(DiskJobResult::Blocked((
                                         id,
-                                        Request::Download {
+                                        DiskRequest::Download {
                                             client,
                                             path,
                                             range_idx,
@@ -558,7 +570,7 @@ impl Request {
                         }
                     } else if range_idx == ranges.len() {
                         // Done writing the final bit
-                        return Ok(JobRes::Done);
+                        return Ok(DiskJobResult::Done);
                     } else if ranges[range_idx].length == 0 {
                         range_idx += 1;
                         // Write the closer if needed
@@ -606,7 +618,7 @@ impl Request {
                         writing = true;
                     }
                 }
-                return Ok(JobRes::Paused(Request::Download {
+                return Ok(DiskJobResult::Paused(DiskRequest::Download {
                     client,
                     path,
                     range_idx,
@@ -620,14 +632,14 @@ impl Request {
                     buf,
                 }));
             }
-            Request::Shutdown => unreachable!(),
+            DiskRequest::Shutdown => unreachable!(),
         }
-        Ok(JobRes::Done)
+        Ok(DiskJobResult::Done)
     }
 
     pub fn register(&mut self, reg: &amy::Registrar) -> io::Result<()> {
         match *self {
-            Request::Download {
+            DiskRequest::Download {
                 ref client,
                 ref mut id,
                 ..
@@ -641,23 +653,23 @@ impl Request {
 
     pub fn tid(&self) -> Option<usize> {
         match *self {
-            Request::Read { ref context, .. } => Some(context.tid),
-            Request::Serialize { tid, .. }
-            | Request::Validate { tid, .. }
-            | Request::ValidatePiece { tid, .. }
-            | Request::Delete { tid, .. }
-            | Request::Move { tid, .. }
-            | Request::Write { tid, .. } => Some(tid),
-            Request::WriteFile { .. }
-            | Request::Download { .. }
-            | Request::Shutdown
-            | Request::Ping
-            | Request::FreeSpace => None,
+            DiskRequest::Read { ref context, .. } => Some(context.tid),
+            DiskRequest::Serialize { tid, .. }
+            | DiskRequest::Validate { tid, .. }
+            | DiskRequest::ValidatePiece { tid, .. }
+            | DiskRequest::Delete { tid, .. }
+            | DiskRequest::Move { tid, .. }
+            | DiskRequest::Write { tid, .. } => Some(tid),
+            DiskRequest::WriteFile { .. }
+            | DiskRequest::Download { .. }
+            | DiskRequest::Shutdown
+            | DiskRequest::Ping
+            | DiskRequest::FreeSpace => None,
         }
     }
 }
 
-impl fmt::Debug for Request {
+impl fmt::Debug for DiskRequest {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "disk::Request")
     }
@@ -674,18 +686,18 @@ impl Location {
         allocate: bool,
     ) -> Location {
         Location {
-            file,
+            file_index: file,
             file_len,
             offset,
             start: start as usize,
             end: end as usize,
-            info,
-            allocate,
+            torrent_info: info,
+            should_allocate: allocate,
         }
     }
 
     pub fn path(&self) -> &Path {
-        &self.info.files[self.file].path
+        &self.torrent_info.files[self.file_index].path
     }
 }
 
@@ -694,50 +706,50 @@ impl fmt::Debug for Location {
         write!(
             f,
             "disk::Location {{ file: {}, off: {}, s: {}, e: {} }}",
-            self.file, self.offset, self.start, self.end
+            self.file_index, self.offset, self.start, self.end
         )
     }
 }
 
-impl Response {
-    pub fn read(context: Ctx, data: Arc<Buffer>) -> Response {
-        Response::Read { context, data }
+impl DiskResponse {
+    pub fn read(context: Context, data: Arc<Buffer>) -> DiskResponse {
+        DiskResponse::Read { context, data }
     }
 
-    pub fn error(tid: usize, err: io::Error) -> Response {
-        Response::Error { tid, err }
+    pub fn error(tid: usize, err: io::Error) -> DiskResponse {
+        DiskResponse::Error { tid, err }
     }
 
-    pub fn moved(tid: usize, path: String) -> Response {
-        Response::Moved { tid, path }
+    pub fn moved(tid: usize, path: String) -> DiskResponse {
+        DiskResponse::Moved { tid, path }
     }
 
-    pub fn validation_complete(tid: usize, invalid: Vec<u32>) -> Response {
-        Response::ValidationComplete { tid, invalid }
+    pub fn validation_complete(tid: usize, invalid: Vec<u32>) -> DiskResponse {
+        DiskResponse::ValidationComplete { tid, invalid }
     }
 
     pub fn tid(&self) -> usize {
         match *self {
-            Response::Read { ref context, .. } => context.tid,
-            Response::ValidationComplete { tid, .. }
-            | Response::Moved { tid, .. }
-            | Response::ValidationUpdate { tid, .. }
-            | Response::PieceValidated { tid, .. }
-            | Response::Error { tid, .. } => tid,
-            Response::FreeSpace(_) => unreachable!(),
+            DiskResponse::Read { ref context, .. } => context.tid,
+            DiskResponse::ValidationComplete { tid, .. }
+            | DiskResponse::Moved { tid, .. }
+            | DiskResponse::ValidationUpdate { tid, .. }
+            | DiskResponse::PieceValidated { tid, .. }
+            | DiskResponse::Error { tid, .. } => tid,
+            DiskResponse::FreeSpace(_) => unreachable!(),
         }
     }
 }
 
-impl fmt::Debug for Response {
+impl fmt::Debug for DiskResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "disk::Response")
     }
 }
 
-impl Ctx {
-    pub fn new(peer_id: usize, tid: usize, idx: u32, begin: u32, length: u32) -> Ctx {
-        Ctx {
+impl Context {
+    pub fn new(peer_id: usize, tid: usize, idx: u32, begin: u32, length: u32) -> Context {
+        Context {
             peer_id: peer_id,
             tid,
             idx,

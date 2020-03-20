@@ -298,7 +298,7 @@ impl<T: cio::ControlIO> Torrent<T> {
         };
         t.start();
         if import {
-            t.cio.msg_disk(disk::Request::validate_piece(
+            t.cio.msg_disk(disk::DiskRequest::validate_piece(
                 t.id,
                 t.info.clone(),
                 t.path.clone(),
@@ -500,7 +500,7 @@ impl<T: cio::ControlIO> Torrent<T> {
         let data = bincode::serialize(&d).expect("Serialization failed!");
         debug!("Sending serialization request!");
         self.cio
-            .msg_disk(disk::Request::serialize(self.id, data, self.info.hash));
+            .msg_disk(disk::DiskRequest::serialize(self.id, data, self.info.hash));
         self.dirty = false;
     }
 
@@ -514,7 +514,7 @@ impl<T: cio::ControlIO> Torrent<T> {
         for file in &self.info.files {
             files.push(file.path.clone());
         }
-        self.cio.msg_disk(disk::Request::delete(
+        self.cio.msg_disk(disk::DiskRequest::delete(
             self.id,
             self.info.hash,
             files,
@@ -703,9 +703,9 @@ impl<T: cio::ControlIO> Torrent<T> {
         &self.trackers
     }
 
-    pub fn handle_disk_resp(&mut self, response: disk::Response) {
+    pub fn handle_disk_resp(&mut self, response: disk::DiskResponse) {
         match response {
-            disk::Response::Read { context, data } => {
+            disk::DiskResponse::Read { context, data } => {
                 trace!("Received piece from disk, uploading!");
                 if let Some(peer) = self.peers.get_mut(&context.peer_id) {
                     let p = Message::s_piece(context.idx, context.begin, context.length, data);
@@ -716,7 +716,7 @@ impl<T: cio::ControlIO> Torrent<T> {
                     peer.send_message(p);
                 }
             }
-            disk::Response::Moved { path, .. } => {
+            disk::DiskResponse::Moved { path, .. } => {
                 debug!("Moved torrent!");
                 let id = self.rpc_id();
                 self.path = Some(path.clone());
@@ -728,7 +728,7 @@ impl<T: cio::ControlIO> Torrent<T> {
                     },
                 ]));
             }
-            disk::Response::PieceValidated { piece, valid, .. } => {
+            disk::DiskResponse::PieceValidated { piece, valid, .. } => {
                 self.validating.remove(&piece);
                 if let StatusState::Import = self.status.state {
                     self.status.state = StatusState::Incomplete;
@@ -766,11 +766,11 @@ impl<T: cio::ControlIO> Torrent<T> {
                     }
                 }
             }
-            disk::Response::ValidationUpdate { percent, .. } => {
+            disk::DiskResponse::ValidationUpdate { percent, .. } => {
                 self.status.validating = Some(percent);
                 self.update_rpc_transfer();
             }
-            disk::Response::ValidationComplete { mut invalid, .. } => {
+            disk::DiskResponse::ValidationComplete { mut invalid, .. } => {
                 debug!("Validation completed!");
                 self.status.validating = None;
                 // Ignore invalid pieces which are
@@ -831,7 +831,7 @@ impl<T: cio::ControlIO> Torrent<T> {
                 self.rpc_update_pieces();
                 self.announce_status();
             }
-            disk::Response::Error { err, .. } => {
+            disk::DiskResponse::Error { err, .. } => {
                 error!("Disk error: {:?}", err);
                 self.status.error = Some(format!("{}", err));
                 self.announce_status();
@@ -840,7 +840,7 @@ impl<T: cio::ControlIO> Torrent<T> {
                     self.pieces.unset_bit(u64::from(piece));
                 }
             }
-            disk::Response::FreeSpace(_) => unreachable!(),
+            disk::DiskResponse::FreeSpace(_) => unreachable!(),
         }
     }
 
@@ -1065,7 +1065,7 @@ impl<T: cio::ControlIO> Torrent<T> {
                 self.stat.add_dl(u64::from(length));
 
                 if piece_done {
-                    self.cio.msg_disk(disk::Request::validate_piece(
+                    self.cio.msg_disk(disk::DiskRequest::validate_piece(
                         self.id,
                         self.info.clone(),
                         self.path.clone(),
@@ -1450,7 +1450,8 @@ impl<T: cio::ControlIO> Torrent<T> {
         let mut path = PathBuf::from(&CONFIG.disk.session);
         path.push(&util::hash_to_id(&self.info.hash));
         path.set_extension("torrent");
-        self.cio.msg_disk(disk::Request::WriteFile { data, path });
+        self.cio
+            .msg_disk(disk::DiskRequest::WriteFile { data, path });
     }
 
     fn magnet_complete(&mut self) {
@@ -1485,7 +1486,7 @@ impl<T: cio::ControlIO> Torrent<T> {
         } else {
             CONFIG.disk.directory.clone()
         };
-        self.cio.msg_disk(disk::Request::Move {
+        self.cio.msg_disk(disk::DiskRequest::Move {
             tid: self.id,
             from,
             to: path,
@@ -1699,17 +1700,21 @@ impl<T: cio::ControlIO> Torrent<T> {
     /// The disk send handle is also provided.
     fn write_piece(&mut self, index: u32, begin: u32, data: Buffer) {
         let locs = TorrentInfo::block_disk_locs_pri(&self.info, &self.priorities, index, begin);
-        self.cio
-            .msg_disk(disk::Request::write(self.id, data, locs, self.path.clone()));
+        self.cio.msg_disk(disk::DiskRequest::write(
+            self.id,
+            data,
+            locs,
+            self.path.clone(),
+        ));
     }
 
     /// Issues a read request of the given torrent
     fn request_read(&mut self, id: usize, index: u32, begin: u32, data: Buffer) {
         let locs = TorrentInfo::block_disk_locs(&self.info, index, begin);
         let len = self.info.block_len(index, begin);
-        let ctx = disk::Ctx::new(id, self.id, index, begin, len);
+        let ctx = disk::Context::new(id, self.id, index, begin, len);
         self.cio
-            .msg_disk(disk::Request::read(ctx, data, locs, self.path.clone()));
+            .msg_disk(disk::DiskRequest::read(ctx, data, locs, self.path.clone()));
     }
 
     fn make_requests_peer_id(&mut self, peer_id: usize) {
@@ -1913,7 +1918,7 @@ impl<T: cio::ControlIO> Torrent<T> {
     }
 
     pub fn validate(&mut self) {
-        self.cio.msg_disk(disk::Request::validate(
+        self.cio.msg_disk(disk::DiskRequest::validate(
             self.id,
             self.info.clone(),
             self.path.clone(),

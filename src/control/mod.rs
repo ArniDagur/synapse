@@ -47,7 +47,7 @@ pub struct Control<T: cio::ControlIO> {
     peers: UHashMap<usize>,
     hash_idx: MHashMap<[u8; 20], usize>,
     data: ServerData,
-    db: amy::Sender<disk::Request>,
+    db: amy::Sender<disk::DiskRequest>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -89,7 +89,7 @@ impl<T: cio::ControlIO> Control<T> {
     pub fn new(
         mut cio: T,
         throttler: Throttler,
-        db: amy::Sender<disk::Request>,
+        db: amy::Sender<disk::DiskRequest>,
     ) -> io::Result<Control<T>> {
         let torrents = UHashMap::default();
         let peers = UHashMap::default();
@@ -164,7 +164,9 @@ impl<T: cio::ControlIO> Control<T> {
         path.push("syn_data");
         match bincode::serialize(&self.data) {
             Ok(data) => {
-                self.db.send(disk::Request::WriteFile { path, data }).ok();
+                self.db
+                    .send(disk::DiskRequest::WriteFile { path, data })
+                    .ok();
             }
             Err(_) => {
                 error!("Failed to serialize server data");
@@ -323,9 +325,9 @@ impl<T: cio::ControlIO> Control<T> {
         self.jobs = jobs;
     }
 
-    fn handle_disk_ev(&mut self, resp: disk::Response) {
+    fn handle_disk_ev(&mut self, resp: disk::DiskResponse) {
         trace!("Got disk response {:?}!", resp);
-        if let disk::Response::FreeSpace(space) = resp {
+        if let disk::DiskResponse::FreeSpace(space) = resp {
             if space / 1_000_000 != self.data.free_space / 1_000_000 {
                 self.data.free_space = space;
                 self.update_rpc_space();
@@ -738,7 +740,7 @@ impl<T: cio::ControlIO> Drop for Control<T> {
         self.cio.msg_rpc(rpc::CtlMessage::Shutdown);
         self.cio.msg_trk(tracker::Request::Shutdown);
         self.cio.msg_listener(listener::Request::Shutdown);
-        self.cio.msg_disk(disk::Request::shutdown());
+        self.cio.msg_disk(disk::DiskRequest::shutdown());
     }
 }
 
@@ -852,7 +854,7 @@ pub struct SpaceUpdate;
 
 impl<T: cio::ControlIO> CJob<T> for SpaceUpdate {
     fn update(&mut self, control: &mut Control<T>) {
-        control.cio.msg_disk(disk::Request::FreeSpace);
+        control.cio.msg_disk(disk::DiskRequest::FreeSpace);
     }
 }
 

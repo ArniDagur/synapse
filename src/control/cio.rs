@@ -30,7 +30,7 @@ pub enum Event {
     },
     RPC(Result<rpc::Message>),
     Tracker(Result<tracker::Response>),
-    Disk(Result<disk::Response>),
+    Disk(Result<disk::DiskResponse>),
     Listener(Result<Box<listener::Message>>),
 }
 
@@ -72,7 +72,7 @@ pub trait ControlIO {
     fn msg_trk(&mut self, msg: tracker::Request);
 
     /// Sends a message to the disk worker
-    fn msg_disk(&mut self, msg: disk::Request);
+    fn msg_disk(&mut self, msg: disk::DiskRequest);
 
     /// Sends a message to the listener worker
     fn msg_listener(&mut self, msg: listener::Request);
@@ -102,7 +102,7 @@ pub mod test {
         pub flushed_peers: Vec<PeerID>,
         pub rpc_msgs: Vec<rpc::CtlMessage>,
         pub trk_msgs: Vec<tracker::Request>,
-        pub disk_msgs: Vec<disk::Request>,
+        pub disk_msgs: Vec<disk::DiskRequest>,
         pub listener_msgs: Vec<listener::Request>,
         pub timers: usize,
         pub peer_cnt: usize,
@@ -183,7 +183,7 @@ pub mod test {
             d.trk_msgs.push(msg);
         }
 
-        fn msg_disk(&mut self, msg: disk::Request) {
+        fn msg_disk(&mut self, msg: disk::DiskRequest) {
             let mut d = self.data.lock().unwrap();
             d.disk_msgs.push(msg);
         }

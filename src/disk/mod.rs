@@ -1,10 +1,10 @@
 mod cache;
 mod job;
 
-pub use self::job::Ctx;
+pub use self::job::Context;
+pub use self::job::DiskRequest;
+pub use self::job::DiskResponse;
 pub use self::job::Location;
-pub use self::job::Request;
-pub use self::job::Response;
 
 use std::collections::VecDeque;
 use std::{fs, io, thread};
@@ -12,7 +12,7 @@ use std::{fs, io, thread};
 use amy;
 
 use self::cache::{BufCache, FileCache};
-use self::job::JobRes;
+use self::job::DiskJobResult;
 use util::UHashMap;
 use {handle, CONFIG};
 
@@ -22,12 +22,12 @@ const JOB_TIME_SLICE: u64 = 150;
 pub struct Disk {
     poll: amy::Poller,
     reg: amy::Registrar,
-    ch: handle::Handle<Request, Response>,
-    jobs: amy::Receiver<Request>,
+    ch: handle::Handle<DiskRequest, DiskResponse>,
+    jobs: amy::Receiver<DiskRequest>,
     files: FileCache,
-    active: VecDeque<Request>,
-    sequential: VecDeque<Request>,
-    blocked: UHashMap<Request>,
+    active: VecDeque<DiskRequest>,
+    sequential: VecDeque<DiskRequest>,
+    blocked: UHashMap<DiskRequest>,
     bufs: BufCache,
 }
 
@@ -35,8 +35,8 @@ impl Disk {
     pub fn new(
         poll: amy::Poller,
         reg: amy::Registrar,
-        ch: handle::Handle<Request, Response>,
-        jobs: amy::Receiver<Request>,
+        ch: handle::Handle<DiskRequest, DiskResponse>,
+        jobs: amy::Receiver<DiskRequest>,
     ) -> Disk {
         Disk {
             poll,
@@ -62,8 +62,8 @@ impl Disk {
                         break;
                     }
                     for ev in v {
-                        if let Some(r) = self.blocked.remove(&ev.id) {
-                            self.enqueue_req(r);
+                        if let Some(request) = self.blocked.remove(&ev.id) {
+                            self.enqueue_request(request);
                         }
                     }
                 }
@@ -84,11 +84,11 @@ impl Disk {
         }
     }
 
-    fn enqueue_req(&mut self, req: Request) {
-        if req.concurrent() || self.active.iter().find(|r| !r.concurrent()).is_none() {
-            self.active.push_back(req);
+    fn enqueue_request(&mut self, request: DiskRequest) {
+        if request.concurrent() || self.active.iter().find(|r| !r.concurrent()).is_none() {
+            self.active.push_back(request);
         } else {
-            self.sequential.push_back(req);
+            self.sequential.push_back(request);
         }
     }
 
@@ -99,11 +99,11 @@ impl Disk {
             let seq = !j.concurrent();
             let mut done = false;
             match j.execute(&mut self.files, &mut self.bufs) {
-                Ok(JobRes::Resp(r)) => {
+                Ok(DiskJobResult::Resp(r)) => {
                     done = true;
                     self.ch.send(r).ok();
                 }
-                Ok(JobRes::Update(s, r)) => {
+                Ok(DiskJobResult::Update(s, r)) => {
                     self.ch.send(r).ok();
                     if rotate % 3 == 0 {
                         self.active.push_back(s);
@@ -111,23 +111,23 @@ impl Disk {
                         self.active.push_front(s);
                     }
                 }
-                Ok(JobRes::Paused(s)) => {
+                Ok(DiskJobResult::Paused(s)) => {
                     if rotate % 3 == 0 {
                         self.active.push_back(s);
                     } else {
                         self.active.push_front(s);
                     }
                 }
-                Ok(JobRes::Blocked((id, s))) => {
+                Ok(DiskJobResult::Blocked((id, s))) => {
                     self.blocked.insert(id, s);
                 }
-                Ok(JobRes::Done) => {
+                Ok(DiskJobResult::Done) => {
                     done = true;
                 }
                 Err(e) => {
                     done = true;
                     if let Some(t) = tid {
-                        self.ch.send(Response::error(t, e)).ok();
+                        self.ch.send(DiskResponse::error(t, e)).ok();
                     } else {
                         error!("Disk job failed: {}", e);
                     }
@@ -145,7 +145,7 @@ impl Disk {
                     }
                     for ev in v {
                         if let Some(r) = self.blocked.remove(&ev.id) {
-                            self.enqueue_req(r);
+                            self.enqueue_request(r);
                         }
                     }
                 }
@@ -161,7 +161,7 @@ impl Disk {
     pub fn handle_events(&mut self) -> bool {
         loop {
             match self.ch.recv() {
-                Ok(Request::Shutdown) => {
+                Ok(DiskRequest::Shutdown) => {
                     return true;
                 }
                 Ok(mut r) => {
@@ -169,10 +169,10 @@ impl Disk {
                     let tid = r.tid();
                     if let Err(e) = r.register(&self.reg) {
                         if let Some(t) = tid {
-                            self.ch.send(Response::error(t, e)).ok();
+                            self.ch.send(DiskResponse::error(t, e)).ok();
                         }
                     }
-                    self.enqueue_req(r);
+                    self.enqueue_request(r);
                 }
                 _ => break,
             }
@@ -181,7 +181,7 @@ impl Disk {
             if r.register(&self.reg).is_err() {
                 continue;
             }
-            self.enqueue_req(r);
+            self.enqueue_request(r);
         }
         false
     }
@@ -190,8 +190,8 @@ impl Disk {
 pub fn start(
     creg: &mut amy::Registrar,
 ) -> io::Result<(
-    handle::Handle<Response, Request>,
-    amy::Sender<Request>,
+    handle::Handle<DiskResponse, DiskRequest>,
+    amy::Sender<DiskRequest>,
     thread::JoinHandle<()>,
 )> {
     let poll = amy::Poller::new()?;
