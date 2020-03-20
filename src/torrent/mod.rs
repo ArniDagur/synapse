@@ -19,7 +19,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use url::Url;
 
 pub use self::bitfield::Bitfield;
-pub use self::info::{TorrentInfo, LocIter};
+pub use self::info::{LocIter, TorrentInfo};
 pub use self::peer::Message;
 pub use self::peer::{Peer, PeerConnection};
 pub use self::picker::Block;
@@ -74,7 +74,6 @@ pub struct Torrent<T: cio::ControlIO> {
     info_idx: Option<usize>,
     created: DateTime<Utc>,
 }
-
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum StatusState {
@@ -778,7 +777,8 @@ impl<T: cio::ControlIO> Torrent<T> {
                 // part of an invalid file(none of the disk locations
                 // refer to files which aren't being downloaded(pri. 1)
                 invalid.retain(|i| {
-                    TorrentInfo::piece_disk_locs(&self.info, *i).any(|loc| self.priorities[loc.file] != 0)
+                    TorrentInfo::piece_disk_locs(&self.info, *i)
+                        .any(|loc| self.priorities[loc.file] != 0)
                 });
                 if invalid.is_empty() {
                     debug!("Torrent succesfully validated!");
@@ -1233,8 +1233,8 @@ impl<T: cio::ControlIO> Torrent<T> {
                                 ),
                             );
                             b.insert("info".to_owned(), bni);
-                            let ni =
-                                TorrentInfo::from_bencode(bencode::BEncode::Dict(b)).map_err(|_| ())?;
+                            let ni = TorrentInfo::from_bencode(bencode::BEncode::Dict(b))
+                                .map_err(|_| ())?;
                             if ni.hash == self.info.hash {
                                 debug!("Magnet file acquired succesfully!");
                                 self.info_idx = None;
@@ -1530,7 +1530,9 @@ impl<T: cio::ControlIO> Torrent<T> {
             path: self.path.as_ref().unwrap_or(&CONFIG.disk.directory).clone(),
             created: self.created,
             modified: Utc::now(),
-            status: self.status.as_rpc(self.stat.avg_upload(), self.stat.avg_download()),
+            status: self
+                .status
+                .as_rpc(self.stat.avg_upload(), self.stat.avg_download()),
             error: self.error(),
             priority: self.priority,
             progress: self.progress(),
@@ -1757,7 +1759,12 @@ impl<T: cio::ControlIO> Torrent<T> {
         }
     }
 
-    pub fn add_inc_peer(&mut self, conn: PeerConnection, id: [u8; 20], rsv: [u8; 8]) -> Option<usize> {
+    pub fn add_inc_peer(
+        &mut self,
+        conn: PeerConnection,
+        id: [u8; 20],
+        rsv: [u8; 8],
+    ) -> Option<usize> {
         if self.peers.values().any(|p| p.addr() == conn.sock().addr()) {
             return None;
         }
@@ -1781,7 +1788,9 @@ impl<T: cio::ControlIO> Torrent<T> {
                 id,
                 kind: resource::ResourceKind::Torrent,
                 error: self.status.error.clone(),
-                status: self.status.as_rpc(self.stat.avg_upload(), self.stat.avg_download()),
+                status: self
+                    .status
+                    .as_rpc(self.stat.avg_upload(), self.stat.avg_download()),
             },
         ]));
     }

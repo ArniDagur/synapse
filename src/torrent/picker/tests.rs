@@ -2,7 +2,7 @@ use super::{Block, Picker};
 use rand::distributions::{Distribution, Range};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use torrent::{Bitfield, TorrentInfo, Peer as TGPeer};
+use torrent::{Bitfield, Peer as TGPeer, TorrentInfo};
 use {control, rand};
 
 type TPeer = TGPeer<control::cio::test::TestControlIO>;

@@ -15,7 +15,7 @@ use rpc::{self, resource};
 use socket::Socket;
 use stat;
 use throttle::Throttle;
-use torrent::{Bitfield, TorrentInfo, Torrent};
+use torrent::{Bitfield, Torrent, TorrentInfo};
 use tracker;
 use util;
 use {CONFIG, DHT_EXT};

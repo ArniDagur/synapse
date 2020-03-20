@@ -35,7 +35,10 @@ impl Choker {
         }
     }
 
-    fn unchoke_random<T: cio::ControlIO>(&mut self, peers: &mut UHashMap<Peer<T>>) -> Option<usize> {
+    fn unchoke_random<T: cio::ControlIO>(
+        &mut self,
+        peers: &mut UHashMap<Peer<T>>,
+    ) -> Option<usize> {
         if let Some(random_id) = random_sample(self.interested.iter()).cloned() {
             peers.get_mut(&random_id).map(|mut peer| {
                 self.interested.remove(&random_id);
@@ -77,7 +80,10 @@ impl Choker {
         }
     }
 
-    pub fn update_upload<T: cio::ControlIO>(&mut self, peers: &mut UHashMap<Peer<T>>) -> Option<SwapRes> {
+    pub fn update_upload<T: cio::ControlIO>(
+        &mut self,
+        peers: &mut UHashMap<Peer<T>>,
+    ) -> Option<SwapRes> {
         if self.update_timer().is_err() {
             return None;
         }

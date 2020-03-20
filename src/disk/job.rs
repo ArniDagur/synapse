@@ -13,7 +13,7 @@ use openssl::sha;
 use super::{BufCache, FileCache, JOB_TIME_SLICE};
 use buffers::Buffer;
 use socket::TSocket;
-use torrent::{TorrentInfo, LocIter};
+use torrent::{LocIter, TorrentInfo};
 use util::{awrite, hash_to_id, io_err, IOR};
 use CONFIG;
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time;
 
 use control::cio;
-use torrent::{Bitfield, TorrentInfo, Peer};
+use torrent::{Bitfield, Peer, TorrentInfo};
 use util::FHashSet;
 
 mod rarest;

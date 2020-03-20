@@ -48,8 +48,11 @@ pub trait ControlIO {
     fn add_peer(&mut self, peer: torrent::PeerConnection) -> Result<PeerID>;
 
     /// Applies f to a peer if it exists
-    fn get_peer<T, F: FnOnce(&mut torrent::PeerConnection) -> T>(&mut self, peer: PeerID, f: F)
-        -> Option<T>;
+    fn get_peer<T, F: FnOnce(&mut torrent::PeerConnection) -> T>(
+        &mut self,
+        peer: PeerID,
+        f: F,
+    ) -> Option<T>;
 
     /// Removes a peer - This will trigger an error being
     /// reported at the next poll time, clients should wait
@@ -83,7 +86,7 @@ pub trait ControlIO {
 
 #[cfg(test)]
 pub mod test {
-    use super::{Event, Result, ControlIO, PeerID, TID};
+    use super::{ControlIO, Event, PeerID, Result, TID};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use {disk, listener, rpc, torrent, tracker};
